@@ -8,6 +8,19 @@ html,body{background:var(--bg);color:var(--text)}
 .card{@apply bg-gray-900/70 border border-gray-800 rounded-2xl p-5 shadow-xl;}
 .btn{@apply inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-accent text-white font-medium hover:opacity-90 transition;}
 .badge{@apply text-xs px-2 py-1 rounded bg-gray-800 border border-gray-700;}
-.ticker{@apply whitespace-nowrap overflow-hidden;}
-.ticker>div{display:inline-block;padding-right:2rem;animation:scroll 18s linear infinite;}
+/* Weather ticker — mobile-first, smooth scroll */
+.ticker{
+  white-space: nowrap;
+  overflow: hidden;
+  display: flex;          /* keeps the two copies in a row */
+}
+.ticker > div{
+  display: inline-block;
+  padding-right: 2rem;
+  animation: scroll 22s linear infinite;  /* slower = easier to read */
+}
+@keyframes scroll{
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-100%); }
+}
 @keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
