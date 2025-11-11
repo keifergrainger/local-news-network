@@ -20,9 +20,11 @@ type RawEvent = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const toTmISO = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 
+/* ----- same normalization / fuzzy dedupe as summary API ----- */
 function normalizeTitle(t = "") {
   return t
     .toLowerCase()
+    .replace(/&/g, " and ")
     .replace(/\s+vs\.\s+/g, " vs ")
     .replace(/\s+vs\s+/g, " vs ")
     .replace(/\s+at\s+/g, " at ")
@@ -40,6 +42,26 @@ function sportsKey(title = ""): string | null {
   const parts = [a, b].sort((x, y) => x.localeCompare(y));
   return `sports:${parts[0]}__${parts[1]}`;
 }
+const STOP = new Set([
+  "the","a","an","and","of","in","at","on","for","with","to","from","by",
+  "live","tour","show","concert","game","match","vs","at","night","festival",
+  "dj","band","orchestra","symphony","present","presents"
+]);
+function tokenize(t = ""): Set<string> {
+  const s = normalizeTitle(t).replace(/[^a-z0-9\s]/g, " ");
+  const tok = s.split(/\s+/).filter(w => w && !STOP.has(w) && w.length > 2);
+  return new Set(tok);
+}
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size && !b.size) return 1;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  const union = a.size + b.size - inter;
+  return union ? inter / union : 0;
+}
+function nearDuplicateTitle(a: string, b: string, thr = 0.9): boolean {
+  return jaccard(tokenize(a), tokenize(b)) >= thr;
+}
 function dayKeyLocal(iso: string) {
   const d = new Date(iso);
   const y = d.getFullYear();
@@ -47,19 +69,27 @@ function dayKeyLocal(iso: string) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
-function dedupeSameDay(events: RawEvent[]) {
-  const keep = new Map<string, RawEvent>();
+function dedupeDaywise(events: RawEvent[]) {
+  const buckets = new Map<string, RawEvent[]>();
   for (const ev of events) {
     if (!ev.start || !ev.title) continue;
     const day = dayKeyLocal(ev.start);
+    const list = buckets.get(day) || [];
     const skey = sportsKey(ev.title);
-    const canon = skey || `${normalizeTitle(ev.title)}|${(ev.address || "").toLowerCase().trim()}`;
-    const key = `${day}|${canon}`;
-    const existing = keep.get(key);
-    if (!existing) keep.set(key, ev);
-    else if (new Date(ev.start).getTime() < new Date(existing.start).getTime()) keep.set(key, ev);
+    let merged = false;
+    for (let i = 0; i < list.length; i++) {
+      const cur = list[i];
+      const curS = sportsKey(cur.title);
+      if ((skey && curS && skey === curS) || nearDuplicateTitle(cur.title, ev.title, 0.9)) {
+        if (new Date(ev.start).getTime() < new Date(cur.start).getTime()) list[i] = ev;
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) list.push(ev);
+    buckets.set(day, list);
   }
-  return Array.from(keep.values());
+  return Array.from(buckets.values()).flat();
 }
 
 /* ---------- Ticketmaster (single-day window) ---------- */
@@ -84,33 +114,23 @@ function mapTmEvents(data: any): RawEvent[] {
     } as RawEvent;
   }).filter((e: RawEvent) => !!e.start);
 }
-
 async function fetchTicketmasterDay(lat: number, lon: number, date: string, radiusMiles = 25) {
   const key = process.env.TICKETMASTER_KEY;
   if (!key) return [] as RawEvent[];
   const start = toTmISO(new Date(`${date}T00:00:00Z`));
   const end   = toTmISO(new Date(new Date(`${date}T00:00:00Z`).getTime() + DAY_MS - 1));
-
   const qs = new URLSearchParams({
-    apikey: key,
-    sort: "date,asc",
-    size: "200",
-    latlong: `${lat},${lon}`,
-    radius: String(radiusMiles),
-    unit: "miles",
-    startDateTime: start,
-    endDateTime: end,
+    apikey: key, sort: "date,asc", size: "200",
+    latlong: `${lat},${lon}`, radius: String(radiusMiles), unit: "miles",
+    startDateTime: start, endDateTime: end,
   });
-  const url = `https://app.ticketmaster.com/discovery/v2/events.json?${qs.toString()}`;
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(`https://app.ticketmaster.com/discovery/v2/events.json?${qs}`, { cache: "no-store" });
     if (!res.ok) return [];
     const data = await res.json().catch(() => ({}));
     const mapped = mapTmEvents(data);
     return mapped.filter(e => dayKeyLocal(e.start) === date);
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 /* ---------- ICS minimal (optional; same-day filter) ---------- */
@@ -124,19 +144,11 @@ async function fetchICS(url: string): Promise<RawEvent[]> {
         const m = b.match(new RegExp(`${line}(?:;[^:]+)?:([^\\r\\n]+)`,"i"));
         return m?.[1]?.trim();
       };
-      const t = s("SUMMARY");
-      const d = s("DTSTART");
+      const t = s("SUMMARY"); const d = s("DTSTART");
       if (!t || !d) continue;
       const iso = /^\d{8}$/.test(d) ? new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}T00:00:00`).toISOString()
                                     : new Date(d.replace(/Z?$/,"Z")).toISOString();
-      out.push({
-        id: `ics:${iso}:${t}`,
-        title: t,
-        start: iso,
-        address: s("LOCATION") || undefined,
-        url: s("URL") || undefined,
-        source: "ICS"
-      });
+      out.push({ id: `ics:${iso}:${t}`, title: t, start: iso, address: s("LOCATION") || undefined, url: s("URL") || undefined, source: "ICS" });
     }
     return out;
   } catch { return []; }
@@ -150,7 +162,6 @@ async function fetchEventbriteDay(city: string, date: string, terms: string[] = 
   const end   = new Date(`${date}T23:59:59Z`).toISOString();
   const queries = terms.length ? terms.slice(0, 5) : [city];
   const out: RawEvent[] = [];
-
   for (const q of queries) {
     const url = new URL("https://www.eventbriteapi.com/v3/events/search/");
     url.searchParams.set("q", q);
@@ -159,31 +170,17 @@ async function fetchEventbriteDay(city: string, date: string, terms: string[] = 
     url.searchParams.set("start_date.range_start", start);
     url.searchParams.set("start_date.range_end", end);
     url.searchParams.set("include_all_series_instances", "true");
-
     try {
-      const res = await fetch(url.toString(), {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-      });
+      const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
       if (!res.ok) continue;
       const data = await res.json();
       for (const ev of (data?.events || [])) {
-        const dt = ev?.start?.utc;
-        if (!dt) continue;
-        const iso = new Date(dt).toISOString();
-        if (dayKeyLocal(iso) !== date) continue;
+        const dt = ev?.start?.utc; if (!dt) continue;
+        const iso = new Date(dt).toISOString(); if (dayKeyLocal(iso) !== date) continue;
         const loc =
           [ev?.venue?.name, ev?.venue?.address?.localized_address_display].filter(Boolean).join(", ") ||
           ev?.venue?.address?.localized_area_display || undefined;
-        out.push({
-          id: `eb:${ev?.id}`,
-          title: ev?.name?.text || "Untitled",
-          start: iso,
-          venue: ev?.venue?.name || undefined,
-          address: loc,
-          url: ev?.url || undefined,
-          source: "Eventbrite"
-        });
+        out.push({ id: `eb:${ev?.id}`, title: ev?.name?.text || "Untitled", start: iso, venue: ev?.venue?.name || undefined, address: loc, url: ev?.url || undefined, source: "Eventbrite" });
       }
     } catch { /* ignore */ }
   }
@@ -214,7 +211,7 @@ export async function GET(req: Request, { params }: { params: { date: string } }
   const eb  = await fetchEventbriteDay(city.city, date, city.eventbriteTerms || []);
 
   const merged = [...ics, ...tm, ...eb].filter(e => dayKeyLocal(e.start) === date);
-  const unique = dedupeSameDay(merged).sort((a,b)=> new Date(a.start).getTime() - new Date(b.start).getTime());
+  const unique = dedupeDaywise(merged).sort((a,b)=> new Date(a.start).getTime() - new Date(b.start).getTime());
 
   return NextResponse.json(
     { date, events: unique },
