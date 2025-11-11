@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { CITIES } from "@/lib/cities";
 
-/** Ensure env vars (like TICKETMASTER_KEY) are available */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -21,9 +20,10 @@ type RawEvent = {
 /* ---------------- Helpers ---------------- */
 const DAY_MS = 24 * 60 * 60 * 1000;
 const toISO = (d: Date) => new Date(d).toISOString();
-// Ticketmaster hates milliseconds. Use YYYY-MM-DDTHH:MM:SSZ
+// Ticketmaster needs no milliseconds
 const toTmISO = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 
+// keep API safe from retail promos
 const SALES_NEGATIVE = [
   "sale","sales","percent off","% off","off%","discount","deal","deals",
   "bogo","clearance","coupon","promo","promotion","grand opening",
@@ -41,7 +41,13 @@ const dedupe = (events: RawEvent[]) => {
   });
 };
 
-/* ---------- ICS parsing (robust to folded lines, CRLF, TZ variants) ---------- */
+// allow up to 12 months (Ticketmaster itself is fine with this if paginated)
+function clampRange(from: Date, to: Date, maxDays = 365) {
+  const maxTo = new Date(from.getTime() + maxDays * DAY_MS);
+  return to.getTime() > maxTo.getTime() ? maxTo : to;
+}
+
+/* ---------- ICS parsing ---------- */
 function unfoldICS(text: string) {
   return text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "");
 }
@@ -93,51 +99,73 @@ async function fetchICS(url: string): Promise<RawEvent[]> {
   }
 }
 
-/* ---------- Ticketmaster helpers (two strategies) ---------- */
-async function tmFetch(url: string) {
-  try {
-    const r = await fetch(url, { cache: "no-store" });
-    const status = r.status;
-    const text = await r.text();
-    let data: any = {};
-    try { data = JSON.parse(text); } catch { /* non-JSON error */ }
-
-    const events = (data?._embedded?.events || []).map((ev: any) => {
-      const whenRaw = ev.dates?.start?.dateTime || ev.dates?.start?.localDate; // localDate fallback
-      const whenISO = whenRaw
-        ? (whenRaw.includes("T") ? new Date(whenRaw).toISOString()
-                                 : new Date(`${whenRaw}T00:00:00`).toISOString())
-        : undefined;
-      const venue = ev._embedded?.venues?.[0];
-      return {
-        id: `tm:${ev.id}`,
-        title: ev.name,
-        start: whenISO!,
-        venue: venue?.name,
-        address: [venue?.address?.line1, venue?.city?.name].filter(Boolean).join(", "),
-        source: "Ticketmaster",
-        url: ev.url,
-        free: false,
-      } as RawEvent;
-    }).filter((e: RawEvent) => !!e.start);
-
+/* ---------- Ticketmaster pagination (key fix) ---------- */
+function mapTmEvents(data: any): RawEvent[] {
+  const arr = data?._embedded?.events || [];
+  return arr.map((ev: any) => {
+    const whenRaw = ev.dates?.start?.dateTime || ev.dates?.start?.localDate;
+    const whenISO = whenRaw
+      ? (whenRaw.includes("T") ? new Date(whenRaw).toISOString()
+                               : new Date(`${whenRaw}T00:00:00`).toISOString())
+      : undefined;
+    const venue = ev._embedded?.venues?.[0];
     return {
-      status,
-      total: data?.page?.totalElements ?? events.length,
-      events,
-      rawText: status !== 200 ? text : undefined
-    };
-  } catch (e) {
-    return { status: 0, total: 0, events: [], rawText: String(e) };
+      id: `tm:${ev.id}`,
+      title: ev.name,
+      start: whenISO!,
+      venue: venue?.name,
+      address: [venue?.address?.line1, venue?.city?.name].filter(Boolean).join(", "),
+      source: "Ticketmaster",
+      url: ev.url,
+      free: false,
+    } as RawEvent;
+  }).filter((e: RawEvent) => !!e.start);
+}
+
+async function fetchPaginated(baseParams: Record<string,string>, maxPages = 5) {
+  const key = process.env.TICKETMASTER_KEY;
+  if (!key) return { status: 0, total: 0, events: [] as RawEvent[], pages: 0 };
+
+  const size = 200; // max per TM
+  let page = 0;
+  let totalPages = 1;
+  let totalElements = 0;
+  const all: RawEvent[] = [];
+  let lastStatus = 0;
+
+  while (page < totalPages && page < maxPages) {
+    const qs = new URLSearchParams({
+      apikey: key,
+      sort: "date,asc",
+      size: String(size),
+      ...baseParams,
+      page: String(page),
+    });
+    const url = `https://app.ticketmaster.com/discovery/v2/events.json?${qs.toString()}`;
+    const res = await fetch(url, { cache: "no-store" });
+    lastStatus = res.status;
+
+    if (!res.ok) {
+      break;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    const mapped = mapTmEvents(data);
+    all.push(...mapped);
+
+    const pg = data?.page || {};
+    totalPages = typeof pg.totalPages === "number" ? pg.totalPages : totalPages;
+    totalElements = typeof pg.totalElements === "number" ? pg.totalElements : totalElements;
+
+    page += 1;
+    // small polite delay to be nice to API (optional)
+    if (page < totalPages) await new Promise(r => setTimeout(r, 80));
   }
+
+  return { status: lastStatus, total: totalElements || all.length, events: all, pages: page };
 }
 
-function clampRange(from: Date, to: Date, maxDays = 180) {
-  const maxTo = new Date(from.getTime() + maxDays * DAY_MS);
-  return to.getTime() > maxTo.getTime() ? maxTo : to;
-}
-
-async function fetchTicketmasterBothWays(
+async function fetchTicketmasterAll(
   cityName: string,
   lat: number,
   lon: number,
@@ -145,40 +173,27 @@ async function fetchTicketmasterBothWays(
   to: Date,
   radiusMiles = 25
 ) {
-  const key = process.env.TICKETMASTER_KEY;
-  if (!key) return { chosen: "none", status: 0, total: 0, events: [], urls: {}, rawText: "no key" };
-
-  // City mode — NO radius, NO locale, NO milliseconds
-  const qsCity = new URLSearchParams({
-    apikey: key,
-    city: cityName,
-    sort: "date,asc",
-    startDateTime: toTmISO(from),
-    endDateTime: toTmISO(to),
-    size: "200",
-  });
-  const urlCity = `https://app.ticketmaster.com/discovery/v2/events.json?${qsCity.toString()}`;
-
-  // Lat/long mode — WITH radius, NO locale, NO milliseconds
-  const qsLat = new URLSearchParams({
-    apikey: key,
+  // Try lat/long WITH radius first
+  const latParams: Record<string,string> = {
     latlong: `${lat},${lon}`,
     radius: String(radiusMiles),
     unit: "miles",
-    sort: "date,asc",
     startDateTime: toTmISO(from),
     endDateTime: toTmISO(to),
-    size: "200",
-  });
-  const urlLat = `https://app.ticketmaster.com/discovery/v2/events.json?${qsLat.toString()}`;
-
-  // Try lat/long first, fallback to city name
-  const a = await tmFetch(urlLat);
-  if (a.total > 0 && a.status === 200) {
-    return { chosen: "latlong", status: a.status, total: a.total, events: a.events, urls: { urlLat, urlCity }, rawText: a.rawText };
+  };
+  const latRes = await fetchPaginated(latParams);
+  if (latRes.status === 200 && latRes.events.length > 0) {
+    return { chosen: "latlong", ...latRes };
   }
-  const b = await tmFetch(urlCity);
-  return { chosen: "city", status: b.status, total: b.total, events: b.events, urls: { urlLat, urlCity }, rawText: b.rawText };
+
+  // Fallback: city name only
+  const cityParams: Record<string,string> = {
+    city: cityName,
+    startDateTime: toTmISO(from),
+    endDateTime: toTmISO(to),
+  };
+  const cityRes = await fetchPaginated(cityParams);
+  return { chosen: "city", ...cityRes };
 }
 
 /* ---------------- API Handler ---------------- */
@@ -189,33 +204,33 @@ export async function GET(req: Request) {
     const rawHost  = (url.searchParams.get("host") || "").toLowerCase();
     const debug    = url.searchParams.get("debug") === "1";
 
-    // Date range (clamped to 180 days for TM)
+    // Date range (clamp to 12 months)
     const fromParam = url.searchParams.get("from");
     const toParam   = url.searchParams.get("to");
     const rangeFrom = fromParam ? new Date(fromParam) : new Date(Date.now() - 7 * DAY_MS);
-    const unclampedTo = toParam ? new Date(toParam) : new Date(Date.now() + 120 * DAY_MS);
-    const rangeTo   = clampRange(rangeFrom, unclampedTo, 180);
+    const unclamped = toParam   ? new Date(toParam)   : new Date(Date.now() + 365 * DAY_MS);
+    const rangeTo   = clampRange(rangeFrom, unclamped, 365);
 
     const city =
       CITIES.find(c => cityHost && cityHost.includes(c.host)) ||
       CITIES.find(c => rawHost && rawHost.includes(c.host)) ||
       CITIES[0];
 
-    // Fetch ICS + Ticketmaster
+    // Fetch ICS + Ticketmaster (fully paginated)
     const [icsArrays, tm] = await Promise.all([
       Promise.all((city.icsFeeds || []).map(u => fetchICS(u))),
-      fetchTicketmasterBothWays(city.city, city.lat, city.lon, rangeFrom, rangeTo, city.eventRadiusMiles ?? 25),
+      fetchTicketmasterAll(city.city, city.lat, city.lon, rangeFrom, rangeTo, city.eventRadiusMiles ?? 25),
     ]);
     const ics = icsArrays.flat();
 
-    // Merge (NO extra date re-filter — trust TM range), still remove retail
+    // Merge and clean (do NOT re-filter dates; TM already filtered)
     const merged = [...ics, ...tm.events]
       .filter(e => !!e.start)
       .filter(e => !isRetailish(e.title || ""));
 
     const events = dedupe(merged)
       .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
-      .slice(0, 300);
+      .slice(0, 2000); // safety cap
 
     const payload: any = {
       city: { host: city.host, name: `${city.city}, ${city.state}` },
@@ -230,8 +245,7 @@ export async function GET(req: Request) {
       payload.tmChosen = tm.chosen;
       payload.tmStatus = tm.status;
       payload.tmTotal = tm.total;
-      payload.tmUrls = tm.urls;
-      if (tm.status !== 200) payload.tmError = tm.rawText;
+      payload.tmPages = tm.pages;
     }
 
     return NextResponse.json(payload);
