@@ -1,0 +1,17 @@
+[
+  {
+    "host": "saltlakeut.com",
+    "headlines": [
+      { "title": "City Council approves downtown street updates", "url": "https://example.com/a" },
+      { "title": "Storm system brings rain Friday — safety tips", "url": "https://example.com/b" },
+      { "title": "New café opens on Main Street this weekend", "url": "https://example.com/c" }
+    ]
+  },
+  {
+    "host": "*",
+    "headlines": [
+      { "title": "Submit your event to get featured →", "url": "/submit" },
+      { "title": "Advertise across our 8-city network →", "url": "/advertise" }
+    ]
+  }
+]
