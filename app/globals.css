@@ -1,26 +1,60 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-:root{--bg:#0f172a;--card:#111827;--text:#e5e7eb}
-html,body{background:var(--bg);color:var(--text)}
-.container{@apply max-w-5xl mx-auto px-4;}
-.nav-link{@apply text-sm text-gray-300 hover:text-white transition;}
-.card{@apply bg-gray-900/70 border border-gray-800 rounded-2xl p-5 shadow-xl;}
-.btn{@apply inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-accent text-white font-medium hover:opacity-90 transition;}
-.badge{@apply text-xs px-2 py-1 rounded bg-gray-800 border border-gray-700;}
-/* Weather ticker — mobile-first, smooth scroll */
-.ticker{
+
+/* ---------- Global Theme ---------- */
+:root {
+  --bg: #0f172a;
+  --card: #111827;
+  --text: #e5e7eb;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ---------- Layout & Components ---------- */
+.container {
+  @apply max-w-5xl mx-auto px-4;
+}
+
+.nav-link {
+  @apply text-sm text-gray-300 hover:text-white transition;
+}
+
+.card {
+  @apply bg-gray-900/70 border border-gray-800 rounded-2xl p-5 shadow-xl;
+}
+
+.btn {
+  @apply inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-accent text-white font-medium hover:opacity-90 transition;
+}
+
+.badge {
+  @apply text-xs px-2 py-1 rounded bg-gray-800 border border-gray-700;
+}
+
+/* ---------- Super Weather & Breaking News Ticker ---------- */
+.ticker {
   white-space: nowrap;
   overflow: hidden;
-  display: flex;          /* keeps the two copies in a row */
+  display: flex; /* keeps both ticker copies in one line */
 }
-.ticker > div{
+
+.ticker > div {
   display: inline-block;
   padding-right: 2rem;
-  animation: scroll 22s linear infinite;  /* slower = easier to read */
+  animation: scroll 25s linear infinite;
 }
-@keyframes scroll{
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-100%); }
+
+/* slower = smoother; adjust speed if you want */
+@keyframes scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
 }
-@keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
