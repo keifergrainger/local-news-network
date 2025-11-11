@@ -1,6 +1,9 @@
+// ===============================================
+// 1) lib/providers/base.ts  (REPLACE the whole file)
+// ===============================================
 import { Business } from '@/types/business';
 
-export type Provider = 'google' | 'yelp';
+export type Provider = 'google' | 'yelp' | 'geoapify';
 
 export type SearchInput = {
   q?: string | null;
@@ -8,7 +11,7 @@ export type SearchInput = {
   lat: number;
   lng: number;
   radius: number; // meters
-  page?: string | null; // provider cursor (google token or yelp offset)
+  page?: string | null; // provider cursor (token or offset)
 };
 
 export type ProviderResult = {
@@ -21,10 +24,7 @@ export interface ProviderClient {
   searchBusinesses(input: SearchInput): Promise<ProviderResult>;
 }
 
-export function getEnvNumber(
-  v: string | undefined,
-  fallback: number,
-): number {
+export function getEnvNumber(v: string | undefined, fallback: number): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
