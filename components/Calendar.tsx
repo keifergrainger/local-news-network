@@ -15,22 +15,17 @@ type ApiEvent = {
 };
 
 type DaySummary = {
-  date: string;       // YYYY-MM-DD (local)
-  tops: ApiEvent[];   // 1 or 2 (sports/concerts prioritized)
-  moreCount: number;  // remaining not included in tops
+  date: string;       // YYYY-MM-DD
+  tops: ApiEvent[];   // 1 or 2 lines for the cell
+  moreCount: number;  // remaining after tops
 };
 
-/* tiny date utils */
+/* tiny utils */
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date)   { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
 function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getMonth() + m, d.getDate()); }
-function formatYMD(d: Date) {
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-function sameDay(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
+function formatYMD(d: Date) { const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${day}`; }
+function sameDay(a: Date, b: Date) { return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate(); }
 function isoToLocalYMD(iso: string) { return formatYMD(new Date(iso)); }
 
 const WINDOW_MONTHS_AHEAD = 2;
@@ -42,7 +37,7 @@ export default function Calendar() {
   const [host, setHost] = useState('');
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
 
-  // cache of exact per-day lists and totals
+  // cache exact lists and totals per day (used to correct the badge and the drawer)
   const [dayEvents, setDayEvents] = useState<Record<string, ApiEvent[] | 'loading' | 'error'>>({});
   const [dayTotals, setDayTotals] = useState<Record<string, number>>({});
 
@@ -54,7 +49,7 @@ export default function Calendar() {
       setLoading(true);
       const from = startOfMonth(anchorMonth);
       const to = endOfMonth(addMonths(anchorMonth, WINDOW_MONTHS_AHEAD));
-      const url = `/api/events?host=${encodeURIComponent(city.host)}&from=${formatYMD(from)}&to=${formatYMD(to)}`;
+      const url = `/api/events/summary?host=${encodeURIComponent(city.host)}&from=${formatYMD(from)}&to=${formatYMD(to)}`;
       const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       setDaysSummary(Array.isArray(data.days) ? data.days : []);
@@ -90,12 +85,8 @@ export default function Calendar() {
 
   const today = new Date();
 
-  /**
-   * Load the exact per-day list.
-   * We ALWAYS post-filter to the user's local day (isoToLocalYMD) to avoid UTC drift.
-   */
+  /** Load the exact list for a day and correct the badge/counts */
   async function ensureDayLoaded(dateStr: string) {
-    // allow refetching if we previously had an error; otherwise keep cached
     if (Array.isArray(dayEvents[dateStr])) return;
 
     setDayEvents(prev => ({ ...prev, [dateStr]: 'loading' }));
@@ -108,16 +99,7 @@ export default function Calendar() {
       setDayEvents(prev => ({ ...prev, [dateStr]: list }));
       setDayTotals(prev => ({ ...prev, [dateStr]: list.length }));
     } catch {
-      try {
-        const res2 = await fetch(`/api/events?full=1&host=${encodeURIComponent(city.host)}&from=${dateStr}&to=${dateStr}`, { cache: 'no-store' });
-        const json2 = await res2.json();
-        const all: ApiEvent[] = Array.isArray(json2.events) ? json2.events : [];
-        const list = all.filter(e => isoToLocalYMD(e.start) === dateStr);
-        setDayEvents(prev => ({ ...prev, [dateStr]: list }));
-        setDayTotals(prev => ({ ...prev, [dateStr]: list.length }));
-      } catch {
-        setDayEvents(prev => ({ ...prev, [dateStr]: 'error' }));
-      }
+      setDayEvents(prev => ({ ...prev, [dateStr]: 'error' }));
     }
   }
 
@@ -157,6 +139,7 @@ export default function Calendar() {
           const s = summaryByDate.get(key);
           const isToday = sameDay(date, today);
 
+          // Use exact count if we have it (after click), else the summary estimate
           const estimatedTotal = s ? s.tops.length + s.moreCount : 0;
           const exactTotal = dayTotals[key];
           const totalForBadge = exactTotal !== undefined ? exactTotal : estimatedTotal;
@@ -226,6 +209,7 @@ export default function Calendar() {
             const state = dayEvents[key];
             if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
             if (state === 'error')   return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
+
             const list: ApiEvent[] = Array.isArray(state) ? state : [];
             const sorted = [...list].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
 
