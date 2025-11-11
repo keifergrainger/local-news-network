@@ -20,10 +20,9 @@ type RawEvent = {
 /* ---------------- Helpers ---------------- */
 const DAY_MS = 24 * 60 * 60 * 1000;
 const toISO = (d: Date) => new Date(d).toISOString();
-// Ticketmaster needs no milliseconds
+// Ticketmaster needs no milliseconds in ISO
 const toTmISO = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 
-// keep API safe from retail promos
 const SALES_NEGATIVE = [
   "sale","sales","percent off","% off","off%","discount","deal","deals",
   "bogo","clearance","coupon","promo","promotion","grand opening",
@@ -31,17 +30,49 @@ const SALES_NEGATIVE = [
 ];
 const isRetailish = (t = "") => SALES_NEGATIVE.some(w => t.toLowerCase().includes(w));
 
-const dedupe = (events: RawEvent[]) => {
-  const seen = new Set<string>();
-  return events.filter(e => {
-    const k = `${(e.title||"").toLowerCase()}|${e.start}|${(e.venue||"").toLowerCase()}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-};
+/** Normalize titles so tiny differences don't bypass dedupe */
+function normalizeTitle(t = "") {
+  return t
+    .toLowerCase()
+    .replace(/\s+vs\.\s+/g, " vs ")   // common sports formatting
+    .replace(/[’'"]/g, "")            // quotes
+    .replace(/[.,!?:;()[\]{}]/g, " ") // punctuation
+    .replace(/\s+/g, " ")             // collapse spaces
+    .trim();
+}
 
-// allow up to 12 months (Ticketmaster itself is fine with this if paginated)
+/** YYYY-MM-DD in local time (based on the event date string) */
+function dayKeyLocal(iso: string) {
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Same-day dedupe: for each (day, normalized title) keep the earliest start.
+ * This removes duplicates where an event appears several times the same day.
+ */
+function dedupeSameDay(events: RawEvent[]) {
+  const keep = new Map<string, RawEvent>(); // key = `${day}|${normTitle}`
+  for (const ev of events) {
+    if (!ev.start || !ev.title) continue;
+    const key = `${dayKeyLocal(ev.start)}|${normalizeTitle(ev.title)}`;
+    const existing = keep.get(key);
+    if (!existing) {
+      keep.set(key, ev);
+    } else {
+      // keep the earliest start time
+      const a = new Date(existing.start).getTime();
+      const b = new Date(ev.start).getTime();
+      if (b < a) keep.set(key, ev);
+    }
+  }
+  return Array.from(keep.values());
+}
+
+// allow up to 12 months
 function clampRange(from: Date, to: Date, maxDays = 365) {
   const maxTo = new Date(from.getTime() + maxDays * DAY_MS);
   return to.getTime() > maxTo.getTime() ? maxTo : to;
@@ -99,7 +130,7 @@ async function fetchICS(url: string): Promise<RawEvent[]> {
   }
 }
 
-/* ---------- Ticketmaster pagination (key fix) ---------- */
+/* ---------- Ticketmaster pagination ---------- */
 function mapTmEvents(data: any): RawEvent[] {
   const arr = data?._embedded?.events || [];
   return arr.map((ev: any) => {
@@ -126,7 +157,7 @@ async function fetchPaginated(baseParams: Record<string,string>, maxPages = 5) {
   const key = process.env.TICKETMASTER_KEY;
   if (!key) return { status: 0, total: 0, events: [] as RawEvent[], pages: 0 };
 
-  const size = 200; // max per TM
+  const size = 200; // TM max per page
   let page = 0;
   let totalPages = 1;
   let totalElements = 0;
@@ -145,9 +176,7 @@ async function fetchPaginated(baseParams: Record<string,string>, maxPages = 5) {
     const res = await fetch(url, { cache: "no-store" });
     lastStatus = res.status;
 
-    if (!res.ok) {
-      break;
-    }
+    if (!res.ok) break;
 
     const data = await res.json().catch(() => ({}));
     const mapped = mapTmEvents(data);
@@ -158,7 +187,6 @@ async function fetchPaginated(baseParams: Record<string,string>, maxPages = 5) {
     totalElements = typeof pg.totalElements === "number" ? pg.totalElements : totalElements;
 
     page += 1;
-    // small polite delay to be nice to API (optional)
     if (page < totalPages) await new Promise(r => setTimeout(r, 80));
   }
 
@@ -216,19 +244,22 @@ export async function GET(req: Request) {
       CITIES.find(c => rawHost && rawHost.includes(c.host)) ||
       CITIES[0];
 
-    // Fetch ICS + Ticketmaster (fully paginated)
+    // Fetch ICS + Ticketmaster (paginated)
     const [icsArrays, tm] = await Promise.all([
       Promise.all((city.icsFeeds || []).map(u => fetchICS(u))),
       fetchTicketmasterAll(city.city, city.lat, city.lon, rangeFrom, rangeTo, city.eventRadiusMiles ?? 25),
     ]);
     const ics = icsArrays.flat();
 
-    // Merge and clean (do NOT re-filter dates; TM already filtered)
+    // Merge (no extra date re-filter), remove retail promos
     const merged = [...ics, ...tm.events]
       .filter(e => !!e.start)
       .filter(e => !isRetailish(e.title || ""));
 
-    const events = dedupe(merged)
+    // NEW: same-day dedupe (keep earliest instance for (day,title))
+    const unique = dedupeSameDay(merged);
+
+    const events = unique
       .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
       .slice(0, 2000); // safety cap
 
