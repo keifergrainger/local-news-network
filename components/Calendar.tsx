@@ -90,9 +90,9 @@ export default function Calendar() {
 
   const today = new Date();
 
+  // Robust loader: try /api/events/[date]; if it fails, fall back to full=1 for that day
   async function ensureDayLoaded(dateStr: string, moreCount: number) {
-    // Only fetch if there are actually more events to show
-    if (moreCount <= 0) return;
+    if (moreCount <= 0) return; // nothing else to load
     if (dayEvents[dateStr] && dayEvents[dateStr] !== 'error') return;
     setDayEvents(prev => ({ ...prev, [dateStr]: 'loading' }));
     try {
@@ -102,7 +102,19 @@ export default function Calendar() {
       const list: ApiEvent[] = Array.isArray(json.events) ? json.events : [];
       setDayEvents(prev => ({ ...prev, [dateStr]: list }));
     } catch {
-      setDayEvents(prev => ({ ...prev, [dateStr]: 'error' }));
+      try {
+        // Fallback: use full mode and filter by day
+        const res2 = await fetch(
+          `/api/events?full=1&host=${encodeURIComponent(city.host)}&from=${dateStr}&to=${dateStr}`,
+          { cache: 'force-cache' }
+        );
+        const json2 = await res2.json();
+        const all: ApiEvent[] = Array.isArray(json2.events) ? json2.events : [];
+        const list = all.filter(e => e.start.slice(0,10) === dateStr);
+        setDayEvents(prev => ({ ...prev, [dateStr]: list }));
+      } catch {
+        setDayEvents(prev => ({ ...prev, [dateStr]: 'error' }));
+      }
     }
   }
 
@@ -213,7 +225,22 @@ export default function Calendar() {
             // Append lazily loaded others if any
             if (s && s.moreCount > 0) {
               if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
-              if (state === 'error')   return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
+              // If fallback also failed, still show the summary without error noise
+              if (state === 'error') return (
+                <div className="mt-2 space-y-2">
+                  {base.map(ev => (
+                    <a key={ev.id}
+                       className="block rounded-lg border border-gray-800 bg-gray-900/60 p-3 hover:bg-gray-900/80"
+                       href={ev.url || '#'} target="_blank" rel="noreferrer">
+                      <div className="text-sm font-medium">{ev.title}</div>
+                      <div className="text-xs text-gray-400">
+                        {new Date(ev.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                        {ev.venue ? ` • ${ev.venue}` : ''}{ev.source ? ` • ${ev.source}` : ''}
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              );
               if (Array.isArray(state)) {
                 const seen = new Set(base.map(e => e.id));
                 list = [...base, ...state.filter(e => !seen.has(e.id))];
