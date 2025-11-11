@@ -55,7 +55,7 @@ function tokenize(t = ""): Set<string> {
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (!a.size && !b.size) return 1;
   let inter = 0;
-  for (const t of a) if (b.has(t)) inter++;
+  a.forEach((t) => { if (b.has(t)) inter++; });
   const union = a.size + b.size - inter;
   return union ? inter / union : 0;
 }
