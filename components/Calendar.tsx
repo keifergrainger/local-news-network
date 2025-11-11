@@ -17,12 +17,13 @@ type ApiEvent = {
 };
 
 type DaySummary = {
-  date: string;
-  tops: ApiEvent[];
+  date: string;      // YYYY-MM-DD
+  tops: ApiEvent[];  // up to 2
   moreCount: number;
 };
 
-function pad2(n: number) { return String(n).padStart(2, "0"); }
+/** Format helpers kept simple for reliability */
+function pad2(n: number) { return n < 10 ? "0" + n : String(n); }
 function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
@@ -30,18 +31,50 @@ function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getM
 function isSameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function weekdayShort(i: number) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][i]; }
 
+/** Normalization to dedupe across sources without Unicode regex flags */
+function norm(s?: string) {
+  if (!s) return "";
+  return s
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** Client-side dedupe: title + local day + venue/address */
+function dedupeEventsClient(events: ApiEvent[]): ApiEvent[] {
+  const seen = new Map<string, ApiEvent>();
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (!e || !e.title || !e.start) continue;
+    const ymd = localYmd(new Date(e.start));
+    const key = `${norm(e.title)}|${ymd}|${norm(e.venue || e.address)}`;
+    if (!seen.has(key)) seen.set(key, e);
+  }
+  return Array.from(seen.values());
+}
+
 export default function Calendar() {
-  const [host, setHost] = useState<string>("");
+  const [host, setHost] = useState("");
   const [activeMonth, setActiveMonth] = useState<Date>(() => startOfMonth(new Date()));
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState<Record<string, DaySummary>>({});
+
+  // Modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedYmd, setSelectedYmd] = useState<string | null>(null);
+  const [dayEvents, setDayEvents] = useState<ApiEvent[]>([]);
+  const [dayLoading, setDayLoading] = useState(false);
+  const [dayError, setDayError] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") setHost(window.location.hostname || "");
   }, []);
   const city = getCityFromHost(host);
 
+  // Fetch month summary (tops + moreCount)
   useEffect(() => {
     const from = startOfMonth(activeMonth);
     const to = endOfMonth(activeMonth);
@@ -60,10 +93,11 @@ export default function Calendar() {
       .finally(() => setLoading(false));
   }, [activeMonth]);
 
+  // Build a 6x7 grid
   const gridDates = useMemo(() => {
     const first = startOfMonth(activeMonth);
     const start = new Date(first);
-    start.setDate(first.getDate() - first.getDay()); // start at Sunday
+    start.setDate(first.getDate() - first.getDay());
     const arr: Date[] = [];
     for (let i = 0; i < 42; i++) {
       const d = new Date(start);
@@ -78,19 +112,73 @@ export default function Calendar() {
     [activeMonth]
   );
 
+  // Open a day modal and fetch ALL events for that day
+  function openDay(ymd: string) {
+    setSelectedYmd(ymd);
+    setModalOpen(true);
+    setDayLoading(true);
+    setDayError(null);
+    const fromISO = `${ymd}T00:00:00.000`;
+    const toISO = `${ymd}T23:59:59.999`;
+    const qs = new URLSearchParams({ from: fromISO, to: toISO }).toString();
+
+    fetch(`/api/events?${qs}`, { cache: "no-store" })
+      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then((json: { events?: ApiEvent[] }) => {
+        const all = Array.isArray(json.events) ? json.events : [];
+        const deduped = dedupeEventsClient(all).sort((a, b) => +new Date(a.start) - +new Date(b.start));
+        setDayEvents(deduped);
+      })
+      .catch(() => setDayError("Couldn’t load events for this day."))
+      .finally(() => setDayLoading(false));
+  }
+
+  // Close modal
+  function closeModal() {
+    setModalOpen(false);
+    setSelectedYmd(null);
+    setDayEvents([]);
+    setDayError(null);
+    setDayLoading(false);
+  }
+
+  // Close on ESC
+  useEffect(() => {
+    if (!modalOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeModal(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modalOpen]);
+
   return (
     <div className="rounded-2xl border border-gray-800 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 bg-gray-900/60 border-b border-gray-800">
-        <div className="text-lg font-semibold">
-          {city.city}, {city.state} — {monthLabel}
-        </div>
+        <div className="text-lg font-semibold">{city.city}, {city.state} — {monthLabel}</div>
         <div className="flex gap-2">
-          <button className="btn btn-sm" onClick={() => setActiveMonth((m) => addMonths(m, -1))} aria-label="Previous month">‹</button>
-          <button className="btn btn-sm" onClick={() => setActiveMonth((m) => addMonths(m, +1))} aria-label="Next month">›</button>
+          <button
+            className="btn btn-sm"
+            onClick={() => setActiveMonth((m) => addMonths(m, -1))}
+            aria-label="Previous month"
+            title="Previous month"
+          >
+            ‹
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={() => setActiveMonth((m) => addMonths(m, +1))}
+            aria-label="Next month"
+            title="Next month"
+          >
+            ›
+          </button>
         </div>
       </div>
 
-      {error && <div className="px-4 py-3 text-sm text-red-400 border-b border-gray-800">{error}</div>}
+      {error && (
+        <div className="px-4 py-3 text-sm text-red-400 border-b border-gray-800">
+          {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-7 gap-px bg-gray-800">
         {Array.from({ length: 7 }).map((_, i) => (
@@ -108,7 +196,16 @@ export default function Calendar() {
           const summary = days[ymd];
 
           return (
-            <div key={ymd} className={`bg-gray-950 p-3 min-h-28 ${inMonth ? "" : "opacity-40"}`}>
+            <div
+              key={ymd}
+              role="button"
+              tabIndex={0}
+              onClick={() => openDay(ymd)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openDay(ymd); }}
+              className={`bg-gray-950 p-3 min-h-28 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 ${inMonth ? "" : "opacity-40"}`}
+              aria-label={`Open events for ${ymd}`}
+              title={`Open events for ${ymd}`}
+            >
               <div className="flex items-center justify-between mb-2">
                 <div className={`text-xs ${today ? "px-2 py-0.5 rounded bg-blue-500/10 text-blue-300" : "text-gray-400"}`}>
                   {d.getDate()}
@@ -123,7 +220,14 @@ export default function Calendar() {
               ) : summary && summary.tops.length > 0 ? (
                 <div className="flex flex-col gap-1">
                   {summary.tops.slice(0, 2).map((ev) => (
-                    <a key={ev.id} href={ev.url || "#"} className="block text-xs hover:underline" target="_blank" rel="noreferrer">
+                    <a
+                      key={ev.id}
+                      href={ev.url || "#"}
+                      className="block text-xs hover:underline"
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()} // don't open modal when clicking a link
+                    >
                       <div className="truncate font-medium text-gray-200">{ev.title}</div>
                       <div className="truncate text-[11px] text-gray-500">
                         {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
@@ -140,6 +244,64 @@ export default function Calendar() {
           );
         })}
       </div>
+
+      {/* Modal */}
+      {modalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+          aria-modal="true"
+          role="dialog"
+        >
+          <div className="absolute inset-0 bg-black/60" onClick={closeModal} />
+          <div className="relative w-full sm:max-w-2xl max-h-[85vh] overflow-hidden rounded-2xl bg-gray-950 border border-gray-800 shadow-xl m-0 sm:m-6">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+              <div className="text-sm text-gray-400">
+                {selectedYmd
+                  ? new Date(selectedYmd + "T00:00:00").toLocaleDateString(undefined, {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })
+                  : ""}
+              </div>
+              <button className="btn btn-sm" onClick={closeModal} aria-label="Close">✕</button>
+            </div>
+
+            <div className="p-4 overflow-auto">
+              {dayLoading && <div className="text-sm text-gray-500">Loading all events…</div>}
+              {dayError && <div className="text-sm text-red-400">{dayError}</div>}
+              {!dayLoading && !dayError && dayEvents.length === 0 && (
+                <div className="text-sm text-gray-500">No events for this day.</div>
+              )}
+              {!dayLoading && !dayError && dayEvents.length > 0 && (
+                <ul className="space-y-3">
+                  {dayEvents.map((ev) => (
+                    <li key={ev.id} className="rounded-lg border border-gray-800 p-3 hover:border-gray-700">
+                      <a
+                        href={ev.url || "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block"
+                      >
+                        <div className="font-medium text-gray-100 truncate">{ev.title}</div>
+                        <div className="text-xs text-gray-400 truncate">
+                          {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+                          {ev.end ? `–${new Date(ev.end).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
+                          {ev.venue ? ` • ${ev.venue}` : ""}
+                          {ev.address ? ` • ${ev.address}` : ""}
+                          {ev.source ? ` • ${ev.source}` : ""}
+                          {ev.free === true ? " • Free" : ""}
+                        </div>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
