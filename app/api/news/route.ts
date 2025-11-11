@@ -34,7 +34,7 @@ const dedupe = (events: RawEvent[]) => {
   });
 };
 
-// ---- ICS feed fetch ----
+// ---- ICS (iCal) fetch + minimal parse
 async function fetchICS(url: string): Promise<RawEvent[]> {
   try {
     const ics = await fetch(url, { cache: "no-store" }).then(r => r.text());
@@ -76,7 +76,7 @@ function icsToISO(s: string) {
   return new Date(s).toISOString();
 }
 
-// ---- Ticketmaster fetch ----
+// ---- Ticketmaster (uses your TICKETMASTER_KEY)
 async function fetchTicketmaster(cityName: string, from: Date, to: Date, radiusMiles = 25): Promise<RawEvent[]> {
   const key = process.env.TICKETMASTER_KEY;
   if (!key) return [];
@@ -109,10 +109,7 @@ async function fetchTicketmaster(cityName: string, from: Date, to: Date, radiusM
         free: false,
       } as RawEvent;
     }).filter((e: RawEvent) => !!e.start);
-  } catch (err) {
-    console.error("Ticketmaster error", err);
-    return [];
-  }
+  } catch { return []; }
 }
 
 export async function GET(req: Request) {
@@ -121,10 +118,11 @@ export async function GET(req: Request) {
     const cityHost = (url.searchParams.get("cityHost") || "").toLowerCase();
     const rawHost = (url.searchParams.get("host") || "").toLowerCase();
 
+    // range via ?from=YYYY-MM-DD&to=YYYY-MM-DD; default = next 90 days
     const fromParam = url.searchParams.get("from");
     const toParam = url.searchParams.get("to");
     const defaultFrom = now();
-    const defaultTo = new Date(Date.now() + 60 * DAY_MS);
+    const defaultTo = new Date(Date.now() + 90 * DAY_MS);
     const rangeFrom = fromParam ? new Date(fromParam) : defaultFrom;
     const rangeTo = toParam ? new Date(toParam) : defaultTo;
 
