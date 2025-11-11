@@ -229,7 +229,7 @@ export async function GET(req: Request) {
     const cityHost = (url.searchParams.get("cityHost") || "").toLowerCase();
     const rawHost  = (url.searchParams.get("host") || "").toLowerCase();
     const debug    = url.searchParams.get("debug") === "1";
-    const full     = url.searchParams.get("full") === "1"; // <-- add this
+    const full     = url.searchParams.get("full") === "1"; // keep full mode if needed
 
     // Date range (clamp to 12 months)
     const fromParam = url.searchParams.get("from");
@@ -261,19 +261,42 @@ export async function GET(req: Request) {
       .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
       .slice(0, 2000); // safety cap
 
-    // --- NEW: Summary response (default) ---
+    // ---------- SUMMARY MODE (default) ----------
     if (!full) {
-      // Bucket by day, keep top, compute counts
+      // Priority classifiers
+      const isSports = (t = "") =>
+        /\b(vs\.?|game|match|basketball|football|hockey|soccer|baseball|nba|nfl|nhl|mls|ncaa|utah jazz|delta center)\b/i.test(t);
+      const isConcert = (t = "") =>
+        /\b(concert|live|tour|orchestra|symphony|band|dj|music|festival)\b/i.test(t);
+
+      const sortByStart = (a: RawEvent, b: RawEvent) =>
+        new Date(a.start).getTime() - new Date(b.start).getTime();
+
+      // Bucket by day
       const buckets = new Map<string, RawEvent[]>();
       for (const ev of events) {
         const k = dayKeyLocal(ev.start);
         if (!buckets.has(k)) buckets.set(k, []);
         buckets.get(k)!.push(ev);
       }
+
+      // Build per-day summary: up to two tops only if sports/concerts exist; otherwise one
       const days = Array.from(buckets.entries())
         .map(([date, arr]) => {
-          arr.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-          return { date, top: arr[0], moreCount: Math.max(0, arr.length - 1) };
+          const sorted = [...arr].sort(sortByStart);
+          const priority = sorted.filter(e => isSports(e.title) || isConcert(e.title));
+          let tops: RawEvent[];
+
+          if (priority.length >= 2) {
+            tops = priority.slice(0, 2);
+          } else if (priority.length === 1) {
+            tops = priority.slice(0, 1);
+          } else {
+            tops = sorted.slice(0, 1);
+          }
+
+          const moreCount = Math.max(0, arr.length - tops.length);
+          return { date, tops, moreCount };
         })
         .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -290,10 +313,12 @@ export async function GET(req: Request) {
         payload.tmTotal = tm.total;
         payload.tmPages = tm.pages;
       }
-      return NextResponse.json(payload, { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" } });
+      return NextResponse.json(payload, {
+        headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" }
+      });
     }
 
-    // --- Legacy full response (if you call ?full=1) ---
+    // ---------- FULL MODE (legacy, if you call ?full=1) ----------
     const payload: any = {
       city: { host: city.host, name: `${city.city}, ${city.state}` },
       from: toISO(rangeFrom),
@@ -308,7 +333,9 @@ export async function GET(req: Request) {
       payload.tmTotal = tm.total;
       payload.tmPages = tm.pages;
     }
-    return NextResponse.json(payload, { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" } });
+    return NextResponse.json(payload, {
+      headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" }
+    });
 
   } catch (e) {
     return NextResponse.json({ days: [] }, { status: 200 });
