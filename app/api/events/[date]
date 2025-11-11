@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { CITIES } from "@/lib/cities";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 /* --- minimal shared types/helpers --- */
 type RawEvent = {
   id: string;
