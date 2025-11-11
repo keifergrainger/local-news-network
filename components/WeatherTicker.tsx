@@ -3,12 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { getCityFromHost } from '@/lib/cities';
 
 type Wx = {
-  temp: number;      // °F
-  feels: number;     // °F
-  humidity: number;  // %
-  wind: number;      // mph
-  windDir: number;   // degrees
-  code: number;      // weather code
+  temp: number;
+  feels: number;
+  humidity: number;
+  wind: number;
+  windDir: number;
+  code: number;
   updatedISO: string;
 };
 
@@ -19,17 +19,18 @@ function codeToText(code: number) {
   if ([1, 2].includes(code)) return 'Partly Cloudy';
   if (code === 3) return 'Cloudy';
   if ([45, 48].includes(code)) return 'Fog';
-  if ([51,53,55,56,57].includes(code)) return 'Drizzle';
-  if ([61,63,65].includes(code)) return 'Rain';
-  if ([66,67].includes(code)) return 'Freezing Rain';
-  if ([71,73,75,77].includes(code)) return 'Snow';
-  if ([80,81,82].includes(code)) return 'Showers';
-  if ([85,86].includes(code)) return 'Snow Showers';
-  if ([95,96,99].includes(code)) return 'Thunderstorms';
+  if ([51, 53, 55, 56, 57].includes(code)) return 'Drizzle';
+  if ([61, 63, 65].includes(code)) return 'Rain';
+  if ([66, 67].includes(code)) return 'Freezing Rain';
+  if ([71, 73, 75, 77].includes(code)) return 'Snow';
+  if ([80, 81, 82].includes(code)) return 'Showers';
+  if ([85, 86].includes(code)) return 'Snow Showers';
+  if ([95, 96, 99].includes(code)) return 'Thunderstorms';
   return 'Conditions';
 }
+
 function degToCompass(deg: number) {
-  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
   return dirs[Math.round(deg / 22.5) % 16];
 }
 
@@ -40,13 +41,14 @@ export default function WeatherTicker() {
   const copy1Ref = useRef<HTMLDivElement>(null);
   const copy2Ref = useRef<HTMLDivElement>(null);
 
-  // 👉 Tweak this to change the real speed (pixels per second)
-  const PIXELS_PER_SECOND = 60; // lower = slower, higher = faster
+  const PIXELS_PER_SECOND = 60; // adjust for speed
 
-  useEffect(() => { if (typeof window !== 'undefined') setHost(window.location.hostname); }, []);
+  useEffect(() => {
+    if (typeof window !== 'undefined') setHost(window.location.hostname);
+  }, []);
   const city = getCityFromHost(host);
 
-  // Weather: F + mph + local timezone
+  // Fetch Weather
   useEffect(() => {
     async function fetchWx() {
       try {
@@ -63,61 +65,62 @@ export default function WeatherTicker() {
           code: c.weather_code,
           updatedISO: c.time
         });
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        console.error(e);
+      }
     }
     fetchWx();
     const id = setInterval(fetchWx, 15 * 60 * 1000);
     return () => clearInterval(id);
   }, [city.lat, city.lon]);
 
-  // Headlines: from /api/news (based on host/city)
+  // Fetch Headlines
   useEffect(() => {
     async function fetchNews() {
       try {
-        if (!host) return;
-        const res = await fetch(`/api/news?host=${encodeURIComponent(host)}`, { cache: 'no-store' });
+        if (!city?.host) return;
+        const res = await fetch(`/api/news?cityHost=${encodeURIComponent(city.host)}`, { cache: 'no-store' });
         const data = await res.json();
         setNews(Array.isArray(data.headlines) ? data.headlines : []);
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        console.error(e);
+      }
     }
     fetchNews();
     const id = setInterval(fetchNews, 15 * 60 * 1000);
     return () => clearInterval(id);
-  }, [host]);
+  }, [city.host]);
 
-  // Build items: Weather + top headlines
-  const items: string[] = useMemo(() => {
+  const items = useMemo(() => {
     const wxLine = wx
-      ? `🌤 ${city.city}, ${city.state} • ${codeToText(wx.code)} • ${Math.round(wx.temp)}°F (feels ${Math.round(wx.feels)}°) • Humidity ${Math.round(wx.humidity)}% • Wind ${Math.round(wx.wind)} mph ${degToCompass(wx.windDir)} • Updated ${new Date(wx.updatedISO).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      ? `🌤 ${city.city}, ${city.state} • ${codeToText(wx.code)} • ${Math.round(wx.temp)}°F (feels ${Math.round(wx.feels)}°) • Humidity ${Math.round(wx.humidity)}% • Wind ${Math.round(wx.wind)} mph ${degToCompass(wx.windDir)}`
       : `Loading weather for ${city.city}…`;
-
-    const newsLines = news.length
-      ? news.map(h => `⚡ ${h.title}`)
-      : [`💡 Got news or an event? Submit it on /submit`];
-
-    return [wxLine, ...newsLines];
+    return [wxLine, ...news.map(n => n.title)];
   }, [wx, news, city]);
 
-  // One long line to repeat twice for continuous scroll
+  // Combine into HTML with clickable links
   const longLine = useMemo(() => {
-    const base = items.join('   •   ');
-    // repeat a few times so it's comfortably wider than most screens
+    const htmlParts = items.map((text, i) => {
+      const link = news[i - 1]?.link;
+      return link
+        ? `<a href="${link}" target="_blank" rel="noopener noreferrer" class="hover:text-blue-400 transition">⚡ ${text}</a>`
+        : text;
+    });
+    const base = htmlParts.join(' • ');
     return Array(6).fill(base).join('     ');
-  }, [items]);
+  }, [items, news]);
 
-  // Measure width and set animation duration so speed is constant
   useEffect(() => {
     function setDuration() {
       const el = copy1Ref.current;
       if (!el) return;
-      const width = el.scrollWidth; // pixels to travel
-      const seconds = Math.max(10, Math.round(width / PIXELS_PER_SECOND)); // min 10s to avoid jerk
+      const width = el.scrollWidth;
+      const seconds = Math.max(10, Math.round(width / PIXELS_PER_SECOND));
       const dur = `${seconds}s`;
       el.style.animationDuration = dur;
       if (copy2Ref.current) copy2Ref.current.style.animationDuration = dur;
     }
     setDuration();
-    // recalc on resize or when content changes
     const ro = new ResizeObserver(setDuration);
     if (copy1Ref.current) ro.observe(copy1Ref.current);
     window.addEventListener('resize', setDuration);
@@ -131,8 +134,8 @@ export default function WeatherTicker() {
     <div className="w-full bg-gradient-to-r from-black/70 via-black/60 to-black/70 border-b border-gray-800">
       <div className="py-2 text-[11px] sm:text-sm text-gray-100">
         <div className="ticker">
-          <div ref={copy1Ref} className="px-3">{longLine}</div>
-          <div ref={copy2Ref} className="px-3" aria-hidden>{longLine}</div>
+          <div ref={copy1Ref} className="px-3" dangerouslySetInnerHTML={{ __html: longLine }} />
+          <div ref={copy2Ref} className="px-3" aria-hidden dangerouslySetInnerHTML={{ __html: longLine }} />
         </div>
       </div>
     </div>
