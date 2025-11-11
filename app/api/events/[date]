@@ -21,10 +21,21 @@ function normalizeTitle(t = "") {
   return t
     .toLowerCase()
     .replace(/\s+vs\.\s+/g, " vs ")
+    .replace(/\s+vs\s+/g, " vs ")
+    .replace(/\s+at\s+/g, " at ")
     .replace(/[’'"]/g, "")
     .replace(/[.,!?:;()[\]{}]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+function sportsKey(title = ""): string | null {
+  const t = normalizeTitle(title);
+  const m = t.match(/(.+?)\s+(?:vs|at)\s+(.+)/i);
+  if (!m) return null;
+  const a = m[1].trim();
+  const b = m[2].trim();
+  const parts = [a, b].sort((x, y) => x.localeCompare(y));
+  return `sports:${parts[0]}__${parts[1]}`;
 }
 function dayKeyLocal(iso: string) {
   const d = new Date(iso);
@@ -37,7 +48,10 @@ function dedupeSameDay(events: RawEvent[]) {
   const keep = new Map<string, RawEvent>();
   for (const ev of events) {
     if (!ev.start || !ev.title) continue;
-    const key = `${dayKeyLocal(ev.start)}|${normalizeTitle(ev.title)}`;
+    const day = dayKeyLocal(ev.start);
+    const skey = sportsKey(ev.title);
+    const canon = skey || `${normalizeTitle(ev.title)}|${(ev.address || "").toLowerCase().trim()}`;
+    const key = `${day}|${canon}`;
     const existing = keep.get(key);
     if (!existing) keep.set(key, ev);
     else if (new Date(ev.start).getTime() < new Date(existing.start).getTime()) keep.set(key, ev);
@@ -125,12 +139,60 @@ async function fetchICS(url: string): Promise<RawEvent[]> {
   } catch { return []; }
 }
 
+/* ---------- Eventbrite (optional) ---------- */
+async function fetchEventbriteDay(city: string, date: string, terms: string[] = []): Promise<RawEvent[]> {
+  const token = process.env.EVENTBRITE_TOKEN;
+  if (!token) return [];
+  const start = new Date(`${date}T00:00:00Z`).toISOString();
+  const end   = new Date(`${date}T23:59:59Z`).toISOString();
+  const queries = terms.length ? terms.slice(0, 5) : [city];
+  const out: RawEvent[] = [];
+
+  for (const q of queries) {
+    const url = new URL("https://www.eventbriteapi.com/v3/events/search/");
+    url.searchParams.set("q", q);
+    url.searchParams.set("sort_by", "date");
+    url.searchParams.set("expand", "venue");
+    url.searchParams.set("start_date.range_start", start);
+    url.searchParams.set("start_date.range_end", end);
+    url.searchParams.set("include_all_series_instances", "true");
+
+    try {
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const ev of (data?.events || [])) {
+        const dt = ev?.start?.utc;
+        if (!dt) continue;
+        const iso = new Date(dt).toISOString();
+        if (dayKeyLocal(iso) !== date) continue;
+        const loc =
+          [ev?.venue?.name, ev?.venue?.address?.localized_address_display].filter(Boolean).join(", ") ||
+          ev?.venue?.address?.localized_area_display || undefined;
+        out.push({
+          id: `eb:${ev?.id}`,
+          title: ev?.name?.text || "Untitled",
+          start: iso,
+          venue: ev?.venue?.name || undefined,
+          address: loc,
+          url: ev?.url || undefined,
+          source: "Eventbrite"
+        });
+      }
+    } catch { /* ignore */ }
+  }
+  return out;
+}
+
 /* ---------- Handler ---------- */
 export async function GET(req: Request, { params }: { params: { date: string } }) {
   const date = params.date; // YYYY-MM-DD
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return NextResponse.json({ error: "Invalid date" }, { status: 400 });
-    }
+  }
 
   const url = new URL(req.url);
   const cityHost = (url.searchParams.get("cityHost") || "").toLowerCase();
@@ -146,8 +208,9 @@ export async function GET(req: Request, { params }: { params: { date: string } }
     ...(city.icsFeeds || []).map(u => fetchICS(u))
   ]);
   const ics = icsArrays.flat();
+  const eb  = await fetchEventbriteDay(city.city, date, city.eventbriteTerms || []);
 
-  const merged = [...ics, ...tm].filter(e => dayKeyLocal(e.start) === date);
+  const merged = [...ics, ...tm, ...eb].filter(e => dayKeyLocal(e.start) === date);
   const unique = dedupeSameDay(merged).sort((a,b)=> new Date(a.start).getTime() - new Date(b.start).getTime());
 
   return NextResponse.json(
