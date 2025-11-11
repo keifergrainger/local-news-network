@@ -6,7 +6,7 @@ import { getCityFromHost } from '@/lib/cities';
 type ApiEvent = {
   id: string;
   title: string;
-  start: string;
+  start: string;  // ISO
   end?: string;
   venue?: string;
   address?: string;
@@ -15,12 +15,12 @@ type ApiEvent = {
 };
 
 type DaySummary = {
-  date: string;       // YYYY-MM-DD
+  date: string;       // YYYY-MM-DD (local)
   tops: ApiEvent[];   // 1 or 2 (sports/concerts prioritized)
-  moreCount: number;  // remaining events not included in tops (estimated before exact fetch)
+  moreCount: number;  // remaining events not included in tops (estimate before exact fetch)
 };
 
-/* tiny utils */
+/* ---------- tiny date utils ---------- */
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date)   { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
 function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getMonth() + m, d.getDate()); }
@@ -33,6 +33,11 @@ function formatYMD(d: Date) {
 function sameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
+/** convert ISO to local YYYY-MM-DD (matches server’s dayKeyLocal) */
+function isoToLocalYMD(iso: string) {
+  const d = new Date(iso);
+  return formatYMD(d);
+}
 
 const WINDOW_MONTHS_AHEAD = 2;
 
@@ -43,9 +48,8 @@ export default function Calendar() {
   const [host, setHost] = useState('');
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
 
-  // lazy cache for drawer
+  // cache of exact per-day lists and totals
   const [dayEvents, setDayEvents] = useState<Record<string, ApiEvent[] | 'loading' | 'error'>>({});
-  // exact totals (override the estimate when available)
   const [dayTotals, setDayTotals] = useState<Record<string, number>>({});
 
   useEffect(() => { if (typeof window !== 'undefined') setHost(window.location.hostname); }, []);
@@ -57,7 +61,8 @@ export default function Calendar() {
       const from = startOfMonth(anchorMonth);
       const to = endOfMonth(addMonths(anchorMonth, WINDOW_MONTHS_AHEAD));
       const url = `/api/events?host=${encodeURIComponent(city.host)}&from=${formatYMD(from)}&to=${formatYMD(to)}`;
-      const res = await fetch(url, { cache: 'force-cache' });
+      // use no-store so we don’t get stale results that disagree with day fetch
+      const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       setDaysSummary(Array.isArray(data.days) ? data.days : []);
     } catch {
@@ -92,13 +97,18 @@ export default function Calendar() {
 
   const today = new Date();
 
-  // Robust loader: always prefer exact per-day list. If per-day route fails, fall back to full=1 day query.
+  /**
+   * Load the exact per-day list.
+   * - Primary: /api/events/[date] (already deduped & local-day filtered by server)
+   * - Fallback: /api/events?full=1 and filter by LOCAL day on client
+   */
   async function ensureDayLoaded(dateStr: string) {
+    // if we already have an array (even empty), don’t refetch
     if (Array.isArray(dayEvents[dateStr])) return;
 
     setDayEvents(prev => ({ ...prev, [dateStr]: 'loading' }));
     try {
-      const res = await fetch(`/api/events/${dateStr}?host=${encodeURIComponent(city.host)}`, { cache: 'force-cache' });
+      const res = await fetch(`/api/events/${dateStr}?host=${encodeURIComponent(city.host)}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(String(res.status));
       const json = await res.json();
       const list: ApiEvent[] = Array.isArray(json.events) ? json.events : [];
@@ -106,10 +116,14 @@ export default function Calendar() {
       setDayTotals(prev => ({ ...prev, [dateStr]: list.length }));
     } catch {
       try {
-        const res2 = await fetch(`/api/events?full=1&host=${encodeURIComponent(city.host)}&from=${dateStr}&to=${dateStr}`, { cache: 'force-cache' });
+        const res2 = await fetch(
+          `/api/events?full=1&host=${encodeURIComponent(city.host)}&from=${dateStr}&to=${dateStr}`,
+          { cache: 'no-store' }
+        );
         const json2 = await res2.json();
         const all: ApiEvent[] = Array.isArray(json2.events) ? json2.events : [];
-        const list = all.filter(e => e.start.slice(0,10) === dateStr);
+        // IMPORTANT: filter by LOCAL day (not UTC slice)
+        const list = all.filter(e => isoToLocalYMD(e.start) === dateStr);
         setDayEvents(prev => ({ ...prev, [dateStr]: list }));
         setDayTotals(prev => ({ ...prev, [dateStr]: list.length }));
       } catch {
@@ -154,12 +168,12 @@ export default function Calendar() {
           const s = summaryByDate.get(key);
           const isToday = sameDay(date, today);
 
-          // Estimated total from summary, overridden by exact total once fetched
+          // Estimated total from summary; override with exact total once fetched for that day
           const estimatedTotal = s ? s.tops.length + s.moreCount : 0;
           const exactTotal = dayTotals[key];
           const totalForBadge = exactTotal !== undefined ? exactTotal : estimatedTotal;
 
-          // "+N more" text: N = total - shown lines (tops length from summary)
+          // "+N more" text = total - number of lines rendered in the cell (tops length)
           const shownLines = s?.tops?.length ?? 0;
           const moreCount = Math.max(0, (exactTotal !== undefined ? exactTotal : estimatedTotal) - shownLines);
 
@@ -186,7 +200,7 @@ export default function Calendar() {
                 )}
               </div>
 
-              {/* Up to two priority lines (sports/concerts) returned by the summary */}
+              {/* Up to two priority lines (sports/concerts) from the summary */}
               {s?.tops?.length ? (
                 <div className="mt-1 space-y-1">
                   {s.tops.slice(0, 2).map(ev => (
@@ -211,7 +225,7 @@ export default function Calendar() {
         {loading ? "Loading events…" : `${daysSummary.length} days loaded in 3-month window`}
       </div>
 
-      {/* Drawer */}
+      {/* Drawer (always shows the exact per-day list when available) */}
       {selectedDate && (
         <div className="mt-4 p-3 rounded-xl bg-gray-900/70 border border-gray-800">
           <div className="flex items-center justify-between">
@@ -223,17 +237,13 @@ export default function Calendar() {
 
           {(() => {
             const key = formatYMD(selectedDate);
-            const s = summaryByDate.get(key);
             const state = dayEvents[key];
-
-            // Prefer exact per-day list entirely when available; otherwise fall back to summary tops
-            const list: ApiEvent[] =
-              Array.isArray(state) ? state :
-              (s?.tops ?? []);
-
             if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
-            if (!list.length && state === 'error') return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
+            if (state === 'error')   return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
 
+            // Prefer full exact list; if not fetched (shouldn’t happen after click), show summary tops as a fallback
+            const s = summaryByDate.get(key);
+            const list: ApiEvent[] = Array.isArray(state) ? state : (s?.tops ?? []);
             const sorted = [...list].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
 
             return (
