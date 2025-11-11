@@ -90,7 +90,7 @@ export default function Calendar() {
 
   const today = new Date();
 
-  // Robust loader: try /api/events/[date]; if it fails, fall back to full=1 for that day
+  // Robust loader: try /api/events/[date]; on failure, fall back to full=1 day query
   async function ensureDayLoaded(dateStr: string, moreCount: number) {
     if (moreCount <= 0) return; // nothing else to load
     if (dayEvents[dateStr] && dayEvents[dateStr] !== 'error') return;
@@ -103,11 +103,7 @@ export default function Calendar() {
       setDayEvents(prev => ({ ...prev, [dateStr]: list }));
     } catch {
       try {
-        // Fallback: use full mode and filter by day
-        const res2 = await fetch(
-          `/api/events?full=1&host=${encodeURIComponent(city.host)}&from=${dateStr}&to=${dateStr}`,
-          { cache: 'force-cache' }
-        );
+        const res2 = await fetch(`/api/events?full=1&host=${encodeURIComponent(city.host)}&from=${dateStr}&to=${dateStr}`, { cache: 'force-cache' });
         const json2 = await res2.json();
         const all: ApiEvent[] = Array.isArray(json2.events) ? json2.events : [];
         const list = all.filter(e => e.start.slice(0,10) === dateStr);
@@ -225,22 +221,24 @@ export default function Calendar() {
             // Append lazily loaded others if any
             if (s && s.moreCount > 0) {
               if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
-              // If fallback also failed, still show the summary without error noise
-              if (state === 'error') return (
-                <div className="mt-2 space-y-2">
-                  {base.map(ev => (
-                    <a key={ev.id}
-                       className="block rounded-lg border border-gray-800 bg-gray-900/60 p-3 hover:bg-gray-900/80"
-                       href={ev.url || '#'} target="_blank" rel="noreferrer">
-                      <div className="text-sm font-medium">{ev.title}</div>
-                      <div className="text-xs text-gray-400">
-                        {new Date(ev.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                        {ev.venue ? ` • ${ev.venue}` : ''}{ev.source ? ` • ${ev.source}` : ''}
-                      </div>
-                    </a>
-                  ))}
-                </div>
-              );
+              if (state === 'error') {
+                // Show the summary lines without error noise
+                return (
+                  <div className="mt-2 space-y-2">
+                    {base.map(ev => (
+                      <a key={ev.id}
+                         className="block rounded-lg border border-gray-800 bg-gray-900/60 p-3 hover:bg-gray-900/80"
+                         href={ev.url || '#'} target="_blank" rel="noreferrer">
+                        <div className="text-sm font-medium">{ev.title}</div>
+                        <div className="text-xs text-gray-400">
+                          {new Date(ev.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                          {ev.venue ? ` • ${ev.venue}` : ''}{ev.source ? ` • ${ev.source}` : ''}
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                );
+              }
               if (Array.isArray(state)) {
                 const seen = new Set(base.map(e => e.id));
                 list = [...base, ...state.filter(e => !seen.has(e.id))];
