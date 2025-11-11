@@ -1,0 +1,158 @@
+import { NextResponse } from "next/server";
+import { CITIES } from "@/lib/cities";
+
+/* --- reuse minimal types/helpers from your main route --- */
+type RawEvent = {
+  id: string;
+  title: string;
+  start: string;
+  end?: string;
+  venue?: string;
+  address?: string;
+  url?: string;
+  source?: string;
+  free?: boolean;
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const toTmISO = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+
+function normalizeTitle(t = "") {
+  return t
+    .toLowerCase()
+    .replace(/\s+vs\.\s+/g, " vs ")
+    .replace(/[’'"]/g, "")
+    .replace(/[.,!?:;()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function dayKeyLocal(iso: string) {
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function dedupeSameDay(events: RawEvent[]) {
+  const keep = new Map<string, RawEvent>();
+  for (const ev of events) {
+    if (!ev.start || !ev.title) continue;
+    const key = `${dayKeyLocal(ev.start)}|${normalizeTitle(ev.title)}`;
+    const existing = keep.get(key);
+    if (!existing) keep.set(key, ev);
+    else if (new Date(ev.start).getTime() < new Date(existing.start).getTime()) keep.set(key, ev);
+  }
+  return Array.from(keep.values());
+}
+
+/* ---------- Ticketmaster (single-day window) ---------- */
+function mapTmEvents(data: any): RawEvent[] {
+  const arr = data?._embedded?.events || [];
+  return arr.map((ev: any) => {
+    const whenRaw = ev.dates?.start?.dateTime || ev.dates?.start?.localDate;
+    const whenISO = whenRaw
+      ? (whenRaw.includes("T") ? new Date(whenRaw).toISOString()
+                               : new Date(`${whenRaw}T00:00:00`).toISOString())
+      : undefined;
+    const venue = ev._embedded?.venues?.[0];
+    return {
+      id: `tm:${ev.id}`,
+      title: ev.name,
+      start: whenISO!,
+      venue: venue?.name,
+      address: [venue?.address?.line1, venue?.city?.name].filter(Boolean).join(", "),
+      source: "Ticketmaster",
+      url: ev.url,
+      free: false,
+    } as RawEvent;
+  }).filter((e: RawEvent) => !!e.start);
+}
+
+async function fetchTicketmasterDay(lat: number, lon: number, date: string, radiusMiles = 25) {
+  const key = process.env.TICKETMASTER_KEY;
+  if (!key) return [] as RawEvent[];
+  const start = toTmISO(new Date(`${date}T00:00:00Z`));
+  const end   = toTmISO(new Date(new Date(`${date}T00:00:00Z`).getTime() + DAY_MS - 1));
+
+  const qs = new URLSearchParams({
+    apikey: key,
+    sort: "date,asc",
+    size: "200",
+    latlong: `${lat},${lon}`,
+    radius: String(radiusMiles),
+    unit: "miles",
+    startDateTime: start,
+    endDateTime: end,
+  });
+  const url = `https://app.ticketmaster.com/discovery/v2/events.json?${qs.toString()}`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => ({}));
+    const mapped = mapTmEvents(data);
+    return mapped.filter(e => dayKeyLocal(e.start) === date);
+  } catch {
+    return [];
+  }
+}
+
+/* ---------- ICS minimal (optional; same-day filter) ---------- */
+async function fetchICS(url: string): Promise<RawEvent[]> {
+  try {
+    const raw = await fetch(url, { cache: "no-store" }).then(r => r.text());
+    // extremely small parse: only DTSTART, SUMMARY, LOCATION, URL
+    const blocks = raw.split("BEGIN:VEVENT").slice(1);
+    const out: RawEvent[] = [];
+    for (const b of blocks) {
+      const s = (line: string) => {
+        const m = b.match(new RegExp(`${line}(?:;[^:]+)?:([^\\r\\n]+)`,"i"));
+        return m?.[1]?.trim();
+      };
+      const t = s("SUMMARY");
+      const d = s("DTSTART");
+      if (!t || !d) continue;
+      const iso = /^\d{8}$/.test(d) ? new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}T00:00:00`).toISOString()
+                                    : new Date(d.replace(/Z?$/,"Z")).toISOString();
+      out.push({
+        id: `ics:${iso}:${t}`,
+        title: t,
+        start: iso,
+        address: s("LOCATION") || undefined,
+        url: s("URL") || undefined,
+        source: "ICS"
+      });
+    }
+    return out;
+  } catch { return []; }
+}
+
+/* ---------- Handler ---------- */
+export async function GET(req: Request, { params }: { params: { date: string } }) {
+  const date = params.date; // YYYY-MM-DD
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return NextResponse.json({ error: "Invalid date" }, { status: 400 });
+  }
+
+  const url = new URL(req.url);
+  const cityHost = (url.searchParams.get("cityHost") || "").toLowerCase();
+  const rawHost  = (url.searchParams.get("host") || "").toLowerCase();
+
+  const city =
+    CITIES.find(c => cityHost && cityHost.includes(c.host)) ||
+    CITIES.find(c => rawHost && rawHost.includes(c.host)) ||
+    CITIES[0];
+
+  const [tm, ...icsArrays] = await Promise.all([
+    fetchTicketmasterDay(city.lat, city.lon, date, city.eventRadiusMiles ?? 25),
+    ...(city.icsFeeds || []).map(u => fetchICS(u))
+  ]);
+  const ics = icsArrays.flat();
+
+  const merged = [...ics, ...tm].filter(e => dayKeyLocal(e.start) === date);
+  const unique = dedupeSameDay(merged).sort((a,b)=> new Date(a.start).getTime() - new Date(b.start).getTime());
+
+  return NextResponse.json(
+    { date, events: unique },
+    { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" } }
+  );
+}
