@@ -34,10 +34,10 @@ const isRetailish = (t = "") => SALES_NEGATIVE.some(w => t.toLowerCase().include
 function normalizeTitle(t = "") {
   return t
     .toLowerCase()
-    .replace(/\s+vs\.\s+/g, " vs ")   // common sports formatting
-    .replace(/[’'"]/g, "")            // quotes
-    .replace(/[.,!?:;()[\]{}]/g, " ") // punctuation
-    .replace(/\s+/g, " ")             // collapse spaces
+    .replace(/\s+vs\.\s+/g, " vs ")
+    .replace(/[’'"]/g, "")
+    .replace(/[.,!?:;()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -52,7 +52,6 @@ function dayKeyLocal(iso: string) {
 
 /**
  * Same-day dedupe: for each (day, normalized title) keep the earliest start.
- * This removes duplicates where an event appears several times the same day.
  */
 function dedupeSameDay(events: RawEvent[]) {
   const keep = new Map<string, RawEvent>(); // key = `${day}|${normTitle}`
@@ -63,7 +62,6 @@ function dedupeSameDay(events: RawEvent[]) {
     if (!existing) {
       keep.set(key, ev);
     } else {
-      // keep the earliest start time
       const a = new Date(existing.start).getTime();
       const b = new Date(ev.start).getTime();
       if (b < a) keep.set(key, ev);
@@ -231,6 +229,7 @@ export async function GET(req: Request) {
     const cityHost = (url.searchParams.get("cityHost") || "").toLowerCase();
     const rawHost  = (url.searchParams.get("host") || "").toLowerCase();
     const debug    = url.searchParams.get("debug") === "1";
+    const full     = url.searchParams.get("full") === "1"; // <-- add this
 
     // Date range (clamp to 12 months)
     const fromParam = url.searchParams.get("from");
@@ -251,18 +250,50 @@ export async function GET(req: Request) {
     ]);
     const ics = icsArrays.flat();
 
-    // Merge (no extra date re-filter), remove retail promos
+    // Merge (no extra date re-filter), remove retail promos, dedupe same-day
     const merged = [...ics, ...tm.events]
       .filter(e => !!e.start)
       .filter(e => !isRetailish(e.title || ""));
 
-    // NEW: same-day dedupe (keep earliest instance for (day,title))
     const unique = dedupeSameDay(merged);
 
     const events = unique
       .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
       .slice(0, 2000); // safety cap
 
+    // --- NEW: Summary response (default) ---
+    if (!full) {
+      // Bucket by day, keep top, compute counts
+      const buckets = new Map<string, RawEvent[]>();
+      for (const ev of events) {
+        const k = dayKeyLocal(ev.start);
+        if (!buckets.has(k)) buckets.set(k, []);
+        buckets.get(k)!.push(ev);
+      }
+      const days = Array.from(buckets.entries())
+        .map(([date, arr]) => {
+          arr.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+          return { date, top: arr[0], moreCount: Math.max(0, arr.length - 1) };
+        })
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      const payload: any = {
+        city: { host: city.host, name: `${city.city}, ${city.state}` },
+        from: toISO(rangeFrom),
+        to: toISO(rangeTo),
+        days
+      };
+      if (debug) {
+        payload.tmKeyPresent = !!process.env.TICKETMASTER_KEY;
+        payload.tmChosen = tm.chosen;
+        payload.tmStatus = tm.status;
+        payload.tmTotal = tm.total;
+        payload.tmPages = tm.pages;
+      }
+      return NextResponse.json(payload, { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" } });
+    }
+
+    // --- Legacy full response (if you call ?full=1) ---
     const payload: any = {
       city: { host: city.host, name: `${city.city}, ${city.state}` },
       from: toISO(rangeFrom),
@@ -270,7 +301,6 @@ export async function GET(req: Request) {
       count: events.length,
       events
     };
-
     if (debug) {
       payload.tmKeyPresent = !!process.env.TICKETMASTER_KEY;
       payload.tmChosen = tm.chosen;
@@ -278,9 +308,9 @@ export async function GET(req: Request) {
       payload.tmTotal = tm.total;
       payload.tmPages = tm.pages;
     }
+    return NextResponse.json(payload, { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" } });
 
-    return NextResponse.json(payload);
   } catch (e) {
-    return NextResponse.json({ events: [] }, { status: 200 });
+    return NextResponse.json({ days: [] }, { status: 200 });
   }
 }
