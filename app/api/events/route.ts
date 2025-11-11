@@ -45,7 +45,6 @@ function normalizeTitle(t = "") {
 /** Try to canonicalize sports matchups so "Utah Jazz vs Mavericks" === "Mavericks at Utah Jazz" */
 function sportsKey(title = ""): string | null {
   const t = normalizeTitle(title);
-  // capture "a vs b" or "a at b"
   const m = t.match(/(.+?)\s+(?:vs|at)\s+(.+)/i);
   if (!m) return null;
   const a = m[1].trim();
@@ -66,7 +65,7 @@ function dayKeyLocal(iso: string) {
 /**
  * Same-day dedupe:
  * - If sportsKey exists, use that so "A vs B" == "B at A"
- * - Else use normalized title (+ address if present) to collapse near-duplicates
+ * - Else use normalized title + address
  * Keep earliest start.
  */
 function dedupeSameDay(events: RawEvent[]) {
@@ -326,7 +325,7 @@ export async function GET(req: Request) {
     if (!full) {
       // Priority classifiers
       const isSports = (t = "") =>
-        /\b(vs\.?|game|match|basketball|football|hockey|soccer|baseball|nba|nfl|nhl|mls|ncaa|jazz|mavericks|utah jazz|delta center|arena)\b/i.test(t);
+        /\b(vs\.?|game|match|basketball|football|hockey|soccer|baseball|nba|nfl|nhl|mls|ncaa|jazz|grizzlies|utah jazz|delta center|arena|stadium)\b/i.test(t);
       const isConcert = (t = "") =>
         /\b(concert|live|tour|orchestra|symphony|band|dj|music|festival)\b/i.test(t);
 
@@ -404,4 +403,3 @@ export async function GET(req: Request) {
     return NextResponse.json({ days: [] }, { status: 200 });
   }
 }
-
