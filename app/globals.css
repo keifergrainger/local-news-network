@@ -46,7 +46,7 @@ body {
 .ticker > div {
   display: inline-block;
   padding-right: 2rem;
-  animation: scroll 50s linear infinite;
+  animation: scroll 65s linear infinite;
 }
 
 /* slower = smoother; adjust speed if you want */
