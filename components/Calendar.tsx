@@ -22,7 +22,7 @@ type DaySummary = {
   moreCount: number;
 };
 
-/** Format helpers kept simple for reliability */
+/** Format helpers */
 function pad2(n: number) { return n < 10 ? "0" + n : String(n); }
 function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
@@ -31,7 +31,7 @@ function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getM
 function isSameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function weekdayShort(i: number) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][i]; }
 
-/** Normalization to dedupe across sources without Unicode regex flags */
+/** Normalization (ES5-safe) */
 function norm(s?: string) {
   if (!s) return "";
   return s
@@ -42,14 +42,27 @@ function norm(s?: string) {
     .trim();
 }
 
-/** Client-side dedupe: title + local day + venue/address */
+/** Drop obvious placeholder/dummy events (why: ICS/test feeds pollute lists) */
+function isJunkEvent(e: ApiEvent) {
+  const t = norm(e.title);
+  if (!t) return true;
+  if (t === "example event title") return true;
+  if (/^(example|sample|test)\s+event/.test(t)) return true;
+  return false;
+}
+
+/** Dedupe across sources; fall back to title+day if location is weak */
 function dedupeEventsClient(events: ApiEvent[]): ApiEvent[] {
   const seen = new Map<string, ApiEvent>();
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
     if (!e || !e.title || !e.start) continue;
     const ymd = localYmd(new Date(e.start));
-    const key = `${norm(e.title)}|${ymd}|${norm(e.venue || e.address)}`;
+    const titleKey = norm(e.title);
+    const loc = norm(e.venue || e.address);
+    const keyBase = `${titleKey}|${ymd}`;
+    // why: many ICS duplicates have missing/noisy location; fallback collapses them
+    const key = loc ? `${keyBase}|${loc}` : keyBase;
     if (!seen.has(key)) seen.set(key, e);
   }
   return Array.from(seen.values());
@@ -93,7 +106,7 @@ export default function Calendar() {
       .finally(() => setLoading(false));
   }, [activeMonth]);
 
-  // Build a 6x7 grid
+  // 6x7 grid
   const gridDates = useMemo(() => {
     const first = startOfMonth(activeMonth);
     const start = new Date(first);
@@ -112,7 +125,6 @@ export default function Calendar() {
     [activeMonth]
   );
 
-  // Open a day modal and fetch ALL events for that day
   function openDay(ymd: string) {
     setSelectedYmd(ymd);
     setModalOpen(true);
@@ -126,14 +138,15 @@ export default function Calendar() {
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then((json: { events?: ApiEvent[] }) => {
         const all = Array.isArray(json.events) ? json.events : [];
-        const deduped = dedupeEventsClient(all).sort((a, b) => +new Date(a.start) - +new Date(b.start));
+        const cleaned = all.filter((e) => !isJunkEvent(e));              // <- filter junk first
+        const deduped = dedupeEventsClient(cleaned)                      // <- strong dedupe
+          .sort((a, b) => +new Date(a.start) - +new Date(b.start));
         setDayEvents(deduped);
       })
       .catch(() => setDayError("Couldn’t load events for this day."))
       .finally(() => setDayLoading(false));
   }
 
-  // Close modal
   function closeModal() {
     setModalOpen(false);
     setSelectedYmd(null);
@@ -142,7 +155,6 @@ export default function Calendar() {
     setDayLoading(false);
   }
 
-  // Close on ESC
   useEffect(() => {
     if (!modalOpen) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeModal(); };
@@ -226,7 +238,7 @@ export default function Calendar() {
                       className="block text-xs hover:underline"
                       target="_blank"
                       rel="noreferrer"
-                      onClick={(e) => e.stopPropagation()} // don't open modal when clicking a link
+                      onClick={(e) => e.stopPropagation()}
                     >
                       <div className="truncate font-medium text-gray-200">{ev.title}</div>
                       <div className="truncate text-[11px] text-gray-500">
@@ -247,21 +259,14 @@ export default function Calendar() {
 
       {/* Modal */}
       {modalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
-          aria-modal="true"
-          role="dialog"
-        >
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" aria-modal="true" role="dialog">
           <div className="absolute inset-0 bg-black/60" onClick={closeModal} />
           <div className="relative w-full sm:max-w-2xl max-h-[85vh] overflow-hidden rounded-2xl bg-gray-950 border border-gray-800 shadow-xl m-0 sm:m-6">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
               <div className="text-sm text-gray-400">
                 {selectedYmd
                   ? new Date(selectedYmd + "T00:00:00").toLocaleDateString(undefined, {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
+                      weekday: "short", month: "short", day: "numeric", year: "numeric",
                     })
                   : ""}
               </div>
@@ -278,12 +283,7 @@ export default function Calendar() {
                 <ul className="space-y-3">
                   {dayEvents.map((ev) => (
                     <li key={ev.id} className="rounded-lg border border-gray-800 p-3 hover:border-gray-700">
-                      <a
-                        href={ev.url || "#"}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="block"
-                      >
+                      <a href={ev.url || "#"} target="_blank" rel="noreferrer" className="block">
                         <div className="font-medium text-gray-100 truncate">{ev.title}</div>
                         <div className="text-xs text-gray-400 truncate">
                           {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
