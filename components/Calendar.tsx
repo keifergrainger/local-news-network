@@ -91,11 +91,13 @@ export default function Calendar() {
   const today = new Date();
 
   async function ensureDayLoaded(dateStr: string, moreCount: number) {
-    if (moreCount <= 0) return; // nothing else to load
+    // Only fetch if there are actually more events to show
+    if (moreCount <= 0) return;
     if (dayEvents[dateStr] && dayEvents[dateStr] !== 'error') return;
     setDayEvents(prev => ({ ...prev, [dateStr]: 'loading' }));
     try {
       const res = await fetch(`/api/events/${dateStr}?host=${encodeURIComponent(city.host)}`, { cache: 'force-cache' });
+      if (!res.ok) throw new Error(String(res.status));
       const json = await res.json();
       const list: ApiEvent[] = Array.isArray(json.events) ? json.events : [];
       setDayEvents(prev => ({ ...prev, [dateStr]: list }));
@@ -204,10 +206,11 @@ export default function Calendar() {
             const s = summaryByDate.get(key);
             const state = dayEvents[key];
 
-            // Compose the list: start with the tops we already have; append lazy-loaded others if available
+            // Start with the tops we already have
             const base = s?.tops ?? [];
             let list: ApiEvent[] = base;
 
+            // Append lazily loaded others if any
             if (s && s.moreCount > 0) {
               if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
               if (state === 'error')   return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
