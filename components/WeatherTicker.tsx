@@ -4,20 +4,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCityFromHost } from "@/lib/cities";
 
-/** -------- Types -------- */
+/* ---------- Config ---------- */
+const LABEL_TEXT = "NEWS UPDATE";
+const SPEED_PX_PER_SEC = 60;
+
+/* ---------- Types ---------- */
 type Article = { title?: string; url?: string; publishedAt?: string; source?: string };
 type WeatherNow = {
   temp?: number; feelsLike?: number; wind?: { speed?: number; dir?: number };
   humidity?: number; desc?: string; icon?: string; unit?: "F" | "C";
 };
 
-/** -------- Time helpers -------- */
-function startOfTodayLocal() { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 0,0,0,0); }
-function endOfTodayLocal()   { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 23,59,59,999); }
+/* ---------- Time helpers ---------- */
+function startOfToday() { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 0,0,0,0); }
+function endOfToday()   { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 23,59,59,999); }
 function isIso(s?: string) { try { return !!s && !Number.isNaN(Date.parse(s)); } catch { return false; } }
-function isTodayLocal(iso?: string) { if (!isIso(iso)) return false; const d = new Date(iso!); return d >= startOfTodayLocal() && d <= endOfTodayLocal(); }
+function isTodayLocal(iso?: string) { if (!isIso(iso)) return false; const d = new Date(iso!); return d >= startOfToday() && d <= endOfToday(); }
 
-/** -------- News helpers -------- */
+/* ---------- News helpers ---------- */
 function keyForArticle(a: Article) { return (a.url || a.title || "").trim().toLowerCase(); }
 function dedupeKeepNewest(list: Article[]) {
   const map = new Map<string, Article>();
@@ -29,7 +33,6 @@ function dedupeKeepNewest(list: Article[]) {
   return Array.from(map.values());
 }
 function coerceArticles(j: any): Article[] {
-  // accept many shapes: headlines | articles | news | items | data.*
   const pools: any[] = [];
   if (Array.isArray(j?.headlines)) pools.push(j.headlines);
   if (Array.isArray(j?.articles)) pools.push(j.articles);
@@ -43,11 +46,8 @@ function coerceArticles(j: any): Article[] {
   const out: Article[] = [];
   for (let i = 0; i < merged.length; i++) {
     const r = merged[i] || {};
-    // url/link/href normalization
     const url = (r.url || r.link || r.href || "").toString();
-    // publishedAt/pubDate/date/created_at normalization
-    const published =
-      r.publishedAt || r.pubDate || r.date || r.datetime || r.time || r.timestamp || r.created_at || r.createdAt;
+    const published = r.publishedAt || r.pubDate || r.date || r.datetime || r.time || r.timestamp || r.created_at || r.createdAt;
     const publishedAt = isIso(published) ? new Date(published).toISOString() : undefined;
     const title = (r.title || r.headline || r.name || "").toString();
     const source = (r.source || r.site || r.publisher || r.outlet || "").toString();
@@ -56,7 +56,7 @@ function coerceArticles(j: any): Article[] {
   return out;
 }
 
-/** -------- Weather helpers -------- */
+/* ---------- Weather helpers ---------- */
 function degToDir(d?: number) {
   if (typeof d !== "number" || isNaN(d)) return undefined;
   const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW","N"];
@@ -88,7 +88,6 @@ async function fetchWeatherLocalFirst(lat: number, lon: number): Promise<Weather
     (await tryLocal("/api/weather"));
   if (local?.temp != null) return local;
 
-  // Fallback: Open-Meteo
   try {
     const url = new URL("https://api.open-meteo.com/v1/forecast");
     url.search = new URLSearchParams({
@@ -116,9 +115,9 @@ async function fetchWeatherLocalFirst(lat: number, lon: number): Promise<Weather
 function codeToDesc(code?: number) {
   const c = code ?? -1;
   if ([0].includes(c)) return "Clear";
-  if ([1, 2].includes(c)) return "Partly Cloudy";
+  if ([1,2].includes(c)) return "Partly Cloudy";
   if ([3].includes(c)) return "Cloudy";
-  if ([45, 48].includes(c)) return "Fog";
+  if ([45,48].includes(c)) return "Fog";
   if ([51,53,55,61,63,65].includes(c)) return "Rain";
   if ([71,73,75].includes(c)) return "Snow";
   if ([80,81,82].includes(c)) return "Showers";
@@ -126,7 +125,7 @@ function codeToDesc(code?: number) {
   return "Weather";
 }
 
-/** -------- Component -------- */
+/* ---------- Component ---------- */
 export default function WeatherTicker() {
   const [host, setHost] = useState("");
   useEffect(() => { if (typeof window !== "undefined") setHost(window.location.hostname || ""); }, []);
@@ -136,25 +135,25 @@ export default function WeatherTicker() {
   const [weather, setWeather] = useState<WeatherNow | null>(null);
   const [nowText, setNowText] = useState<string>("");
 
-  const rootRef  = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const pass1Ref = useRef<HTMLDivElement | null>(null);
 
-  // Clock
+  // clock
   useEffect(() => {
-    const update = () => setNowText(new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }));
-    update();
-    const t = window.setInterval(update, 30_000);
+    const tick = () => setNowText(new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }));
+    tick();
+    const t = window.setInterval(tick, 30_000);
     return () => window.clearInterval(t);
   }, []);
 
-  // News polling (60s) – parses headlines/articles/news/items
+  // news (60s)
   useEffect(() => {
     let t: number | null = null;
     async function refreshNews() {
       try {
         const qs = new URLSearchParams({
-          from: startOfTodayLocal().toISOString(),
-          to: endOfTodayLocal().toISOString(),
+          from: startOfToday().toISOString(),
+          to: endOfToday().toISOString(),
           ...(host ? { host: host.toLowerCase(), cityHost: host.toLowerCase() } : {}),
         });
         const r = await fetch(`/api/news?${qs.toString()}`, { cache: "no-store" });
@@ -174,7 +173,7 @@ export default function WeatherTicker() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host]);
 
-  // Weather refresh (10m)
+  // weather (10m)
   useEffect(() => {
     let t: number | null = null;
     async function refreshWx() {
@@ -186,7 +185,7 @@ export default function WeatherTicker() {
     return () => { if (t) window.clearInterval(t); };
   }, [city.lat, city.lon]);
 
-  // Build: 2 news → weather → repeat
+  // interleave: 2 news → 1 weather
   const items = useMemo(() => {
     const out: Array<{ kind: "news" | "weather"; data?: Article }> = [];
     let n = 0;
@@ -194,52 +193,72 @@ export default function WeatherTicker() {
       out.push({ kind: "news", data: articles[i] });
       if (++n % 2 === 0 && weather) out.push({ kind: "weather" });
     }
-    if (!articles.length && weather) out.push({ kind: "weather" }); // fallback
+    if (!articles.length && weather) out.push({ kind: "weather" });
     return out;
   }, [articles, weather]);
 
-  // Measure width → set animation duration (smooth pace)
+  // pace marquee by content width
   useEffect(() => {
     const root = rootRef.current, pass1 = pass1Ref.current;
     if (!root || !pass1) return;
     const w = pass1.scrollWidth || 1;
-    const pxPerSec = 60;
-    const dur = Math.max(20, Math.round(w / pxPerSec));
+    const dur = Math.max(20, Math.round(w / SPEED_PX_PER_SEC));
     root.style.setProperty("--ticker-duration", `${dur}s`);
   }, [items, weather?.temp, weather?.feelsLike, weather?.wind?.speed]);
 
   return (
-    <div ref={rootRef} className="w-full border-b border-gray-800 bg-[#0a0a0a]/90 backdrop-blur">
-      {/* Header strip */}
-      <div className="flex items-center gap-3 px-3 py-1.5">
-        <span className="inline-flex items-center gap-1 rounded-md bg-red-600 text-white text-[10px] font-semibold px-2 py-0.5">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
-          LIVE
-        </span>
-        <span className="text-[11px] text-gray-300">{city.city}, {city.state}</span>
-        <span className="text-[11px] text-gray-500">•</span>
-        <span className="text-[11px] text-gray-300">{nowText}</span>
-      </div>
-
-      {/* Ticker line */}
-      <div className="relative overflow-hidden">
-        <div className="ticker-lane">
-          {/* Pass 1 */}
-          <div ref={pass1Ref} className="ticker-pass">
-            {items.length === 0 ? (
-              <span className="text-xs text-gray-500 px-3 py-2">No fresh news yet today.</span>
-            ) : items.map((it, idx) => <TickerItem key={`p1-${idx}`} kind={it.kind} data={it.data} weather={weather} />)}
+    <div className="w-full">
+      <div ref={rootRef} className="relative overflow-hidden border-b border-slate-800 bg-gradient-to-b from-white/85 to-slate-100/70 dark:from-slate-900/70 dark:to-slate-900/40">
+        {/* Left badge */}
+        <div className="absolute left-2 top-1.5 z-20 flex h-7 items-stretch select-none">
+          <div className="flex items-center rounded-l-md bg-gradient-to-r from-[#1d4ed8] to-[#60a5fa] px-3 shadow-md">
+            <span className="text-[11px] font-extrabold tracking-wide text-white">{LABEL_TEXT}</span>
           </div>
-          {/* Pass 2 (duplicate) */}
-          <div className="ticker-pass" aria-hidden>
-            {items.length === 0 ? (
-              <span className="text-xs text-gray-500 px-3 py-2">No fresh news yet today.</span>
-            ) : items.map((it, idx) => <TickerItem key={`p2-${idx}`} kind={it.kind} data={it.data} weather={weather} />)}
+          <div className="w-3 skew-x-[-20deg] bg-gradient-to-r from-[#60a5fa] to-white/0 shadow-md rounded-r-sm" />
+        </div>
+
+        {/* subtle pattern */}
+        <div className="pointer-events-none absolute inset-0 opacity-[0.06] mix-blend-overlay">
+          <div className="h-full w-full bg-[radial-gradient(circle_at_20%_10%,#000_1px,transparent_1px)] [background-size:10px_10px]" />
+        </div>
+
+        {/* meta row */}
+        <div className="relative z-10 flex items-center gap-2 pl-36 pr-3 pt-1 text-[11px] text-slate-700 dark:text-slate-300">
+          <span className="font-medium">{getCityFromHost(host).city}, {getCityFromHost(host).state}</span>
+          <span className="text-slate-400">•</span>
+          <span>{nowText}</span>
+        </div>
+
+        {/* ticker */}
+        <div className="relative z-10 mt-1 flex items-center">
+          <div className="absolute right-0 top-0 h-full w-10 bg-gradient-to-l from-white/80 to-transparent dark:from-slate-900/70 pointer-events-none" />
+          <div className="ticker-lane group ml-36 pr-10 hover:[animation-play-state:paused]">
+            {/* pass 1 */}
+            <div ref={pass1Ref} className="ticker-pass">
+              {items.length === 0 ? (
+                <span className="mx-3 rounded-md border border-slate-300/70 bg-white/70 px-3 py-1.5 text-xs text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-200">
+                  No fresh news yet today.
+                </span>
+              ) : items.map((it, idx) => (
+                <TickerItem key={`p1-${idx}`} kind={it.kind} data={it.data} weather={weather} />
+              ))}
+            </div>
+            {/* pass 2 */}
+            <div className="ticker-pass" aria-hidden>
+              {items.length === 0 ? (
+                <span className="mx-3 rounded-md border border-slate-300/70 bg-white/70 px-3 py-1.5 text-xs text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-200">
+                  No fresh news yet today.
+                </span>
+              ) : items.map((it, idx) => (
+                <TickerItem key={`p2-${idx}`} kind={it.kind} data={it.data} weather={weather} />
+              ))}
+            </div>
           </div>
         </div>
+
+        <div className="relative z-10 h-[3px] bg-gradient-to-r from-slate-300/70 via-white/70 to-slate-300/70 dark:from-slate-700 dark:via-slate-800 dark:to-slate-700" />
       </div>
 
-      {/* Scoped marquee CSS */}
       <style jsx>{`
         .ticker-lane {
           display: flex;
@@ -249,25 +268,25 @@ export default function WeatherTicker() {
         .ticker-pass { display: flex; align-items: center; gap: 12px; padding-right: 24px; }
         @keyframes ticker-scroll {
           from { transform: translateX(0); }
-          to   { transform: translateX(-50%); } /* two identical passes => -50% loop */
+          to   { transform: translateX(-50%); }
         }
       `}</style>
     </div>
   );
 }
 
-/** -------- Pieces -------- */
+/* ---------- Pieces ---------- */
 function TickerItem(props: { kind: "news" | "weather"; data?: Article; weather: WeatherNow | null }) {
   if (props.kind === "weather") {
     const w = props.weather;
     const dir = degToDir(w?.wind?.dir);
     return (
-      <div className="inline-flex items-center gap-2 rounded-md border border-gray-800 bg-black/40 px-3 py-1.5">
+      <div className="mx-1 inline-flex items-center gap-2 rounded-md border border-slate-300/70 bg-white/80 px-3 py-1.5 text-slate-800 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-100">
         <span className="text-base">⛅</span>
-        <span className="text-sm text-gray-100 font-semibold">
+        <span className="text-sm font-semibold">
           {w?.temp != null ? Math.round(w.temp) : "--"}°{w?.unit || "F"}
         </span>
-        <span className="text-[11px] text-gray-400">
+        <span className="text-[11px] text-slate-600 dark:text-slate-300">
           {w?.desc || "Weather"}
           {w?.feelsLike != null ? ` • Feels ${Math.round(w.feelsLike)}°` : ""}
           {w?.wind?.speed != null ? ` • ${dir ?? ""}${dir ? " " : ""}${Math.round(w.wind.speed)} mph` : ""}
@@ -285,12 +304,13 @@ function TickerItem(props: { kind: "news" | "weather"; data?: Article; weather: 
         href={a.url || "#"}
         target="_blank"
         rel="noreferrer"
-        className="group inline-flex items-center gap-2 rounded-md border border-gray-800 bg-black/30 px-3 py-1.5 hover:border-gray-700"
+        className="group mx-1 inline-flex items-center gap-2 rounded-md border border-slate-300/70 bg-white/70 px-3 py-1.5 text-slate-900 shadow-sm hover:bg-white/90 hover:border-slate-400 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-100 dark:hover:border-slate-600"
       >
-        <span className="text-[11px] text-gray-400">{time}{a.source ? ` • ${a.source}` : ""}</span>
-        <span className="text-sm text-gray-100 max-w-[32rem] truncate group-hover:underline">{a.title}</span>
+        <span className="text-[11px] text-slate-500 dark:text-slate-300">{time}{a.source ? ` • ${a.source}` : ""}</span>
+        <span className="text-sm max-w-[32rem] truncate group-hover:underline">{a.title}</span>
       </a>
-      <span className="text-gray-700" aria-hidden>|</span>
+      <span className="mx-1 text-slate-400 dark:text-slate-600" aria-hidden>|</span>
     </>
   );
 }
+
