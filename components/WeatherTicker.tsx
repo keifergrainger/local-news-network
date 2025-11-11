@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getCityFromHost } from '@/lib/cities';
 
 type Wx = {
@@ -29,7 +29,7 @@ function codeToText(code: number) {
   return 'Conditions';
 }
 function degToCompass(deg: number) {
-  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
   return dirs[Math.round(deg / 22.5) % 16];
 }
 
@@ -37,6 +37,11 @@ export default function WeatherTicker() {
   const [host, setHost] = useState('');
   const [wx, setWx] = useState<Wx | null>(null);
   const [news, setNews] = useState<Headline[]>([]);
+  const copy1Ref = useRef<HTMLDivElement>(null);
+  const copy2Ref = useRef<HTMLDivElement>(null);
+
+  // 👉 Tweak this to change the real speed (pixels per second)
+  const PIXELS_PER_SECOND = 60; // lower = slower, higher = faster
 
   useEffect(() => { if (typeof window !== 'undefined') setHost(window.location.hostname); }, []);
   const city = getCityFromHost(host);
@@ -93,18 +98,41 @@ export default function WeatherTicker() {
     return [wxLine, ...newsLines];
   }, [wx, news, city]);
 
-  // Make a very long line for smooth continuous scroll
+  // One long line to repeat twice for continuous scroll
   const longLine = useMemo(() => {
     const base = items.join('   •   ');
-    return Array(10).fill(base).join('     ');
+    // repeat a few times so it's comfortably wider than most screens
+    return Array(6).fill(base).join('     ');
   }, [items]);
+
+  // Measure width and set animation duration so speed is constant
+  useEffect(() => {
+    function setDuration() {
+      const el = copy1Ref.current;
+      if (!el) return;
+      const width = el.scrollWidth; // pixels to travel
+      const seconds = Math.max(10, Math.round(width / PIXELS_PER_SECOND)); // min 10s to avoid jerk
+      const dur = `${seconds}s`;
+      el.style.animationDuration = dur;
+      if (copy2Ref.current) copy2Ref.current.style.animationDuration = dur;
+    }
+    setDuration();
+    // recalc on resize or when content changes
+    const ro = new ResizeObserver(setDuration);
+    if (copy1Ref.current) ro.observe(copy1Ref.current);
+    window.addEventListener('resize', setDuration);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', setDuration);
+    };
+  }, [longLine, PIXELS_PER_SECOND]);
 
   return (
     <div className="w-full bg-gradient-to-r from-black/70 via-black/60 to-black/70 border-b border-gray-800">
       <div className="py-2 text-[11px] sm:text-sm text-gray-100">
         <div className="ticker">
-          <div className="px-3">{longLine}</div>
-          <div className="px-3" aria-hidden>{longLine}</div>
+          <div ref={copy1Ref} className="px-3">{longLine}</div>
+          <div ref={copy2Ref} className="px-3" aria-hidden>{longLine}</div>
         </div>
       </div>
     </div>
