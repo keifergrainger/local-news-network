@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { CITIES } from "@/lib/cities";
 
-/* --- reuse minimal types/helpers from your main route --- */
+/* --- minimal shared types/helpers --- */
 type RawEvent = {
   id: string;
   title: string;
@@ -100,7 +100,6 @@ async function fetchTicketmasterDay(lat: number, lon: number, date: string, radi
 async function fetchICS(url: string): Promise<RawEvent[]> {
   try {
     const raw = await fetch(url, { cache: "no-store" }).then(r => r.text());
-    // extremely small parse: only DTSTART, SUMMARY, LOCATION, URL
     const blocks = raw.split("BEGIN:VEVENT").slice(1);
     const out: RawEvent[] = [];
     for (const b of blocks) {
@@ -131,7 +130,7 @@ export async function GET(req: Request, { params }: { params: { date: string } }
   const date = params.date; // YYYY-MM-DD
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return NextResponse.json({ error: "Invalid date" }, { status: 400 });
-  }
+    }
 
   const url = new URL(req.url);
   const cityHost = (url.searchParams.get("cityHost") || "").toLowerCase();
