@@ -1,6 +1,5 @@
 // app/api/events/summary/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { getCityFromHost } from "@/lib/cities";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,81 +22,81 @@ type DaySummary = {
   moreCount: number;
 };
 
-// avoid String.padStart (older targets)
+// ES5-safe helpers
 function pad2(n: number) { return n < 10 ? "0" + n : String(n); }
-function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
-function toISO(d: Date) {
-  // stable inclusive ranges regardless of server TZ
+function localYmd(d: Date) { return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); }
+function toLocalISODate(d: Date) {
+  // normalize to "local midnight" ISO string (no TZ drift when parsed later)
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString();
 }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999); }
-
-// No /u flag, no \p{…}; works on older targets
+// No /u or \p{…}
 function norm(s?: string) {
   if (!s) return "";
   return s
-    .normalize("NFKD")               // split accents
-    .replace(/[\u0300-\u036f]/g, "") // remove combining marks
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")     // collapse non-alnum
+    .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
 
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
-    const hostHeader = req.headers.get("host") || "";
-    const city = getCityFromHost(hostHeader);
 
+    // Parse range (default: current month)
     const now = new Date();
     const fromParam = url.searchParams.get("from");
     const toParam = url.searchParams.get("to");
     const from = fromParam ? new Date(fromParam) : startOfMonth(now);
     const to = toParam ? new Date(toParam) : endOfMonth(now);
 
-    // Reuse your existing collector
-    const origin = req.nextUrl.origin;
-    const eventsResp = await fetch(
-      `${origin}/api/events?from=${encodeURIComponent(toISO(from))}&to=${encodeURIComponent(toISO(to))}`,
-      { headers: { "x-internal": "events-summary" }, cache: "no-store" }
-    );
+    // Build an absolute URL to our own /api/events, reuse same origin, forward cookies (if any)
+    const eventsUrl = new URL(req.url);
+    eventsUrl.pathname = "/api/events";
+    eventsUrl.search = `from=${encodeURIComponent(toLocalISODate(from))}&to=${encodeURIComponent(toLocalISODate(to))}`;
 
-    if (!eventsResp.ok) {
-      // Fail-soft so UI renders even if upstream fails
-      return NextResponse.json({ city, from: toISO(from), to: toISO(to), days: [] }, { status: 200 });
-    }
+    const eventsResp = await fetch(eventsUrl.toString(), {
+      // forward cookies in case your /api/events uses them for city/tenant
+      headers: { cookie: req.headers.get("cookie") || "" },
+      cache: "no-store",
+    });
 
-    const eventsJson: { events?: ApiEvent[] } = await eventsResp.json();
-    const raw = Array.isArray(eventsJson.events) ? eventsJson.events : [];
+    const rawEvents: ApiEvent[] = eventsResp.ok
+      ? (await eventsResp.json()).events || []
+      : [];
 
-    // --- De-dupe spam: same title + same local day + same venue/address
+    // ---- De-dupe: title + local day + venue/address
     const seen = new Map<string, ApiEvent>();
-    for (let i = 0; i < raw.length; i++) {
-      const e = raw[i];
+    for (let i = 0; i < rawEvents.length; i++) {
+      const e = rawEvents[i];
       if (!e || !e.title || !e.start) continue;
       const ymd = localYmd(new Date(e.start));
-      const key = `${norm(e.title)}|${ymd}|${norm(e.venue || e.address)}`;
+      const key = norm(e.title) + "|" + ymd + "|" + norm(e.venue || e.address);
       if (!seen.has(key)) seen.set(key, e);
     }
-    const deduped = Array.from(seen.values()); // <- no spread on MapIterator
+    const deduped = Array.from(seen.values());
 
-    // --- Group by day
+    // ---- Group by day
     const byDay = new Map<string, ApiEvent[]>();
     for (let i = 0; i < deduped.length; i++) {
       const e = deduped[i];
       const ymd = localYmd(new Date(e.start));
-      const arr = byDay.get(ymd) || [];
-      arr.push(e);
-      byDay.set(ymd, arr);
+      const list = byDay.get(ymd) || [];
+      list.push(e);
+      byDay.set(ymd, list);
     }
 
-    // --- Build summaries (exactly 2 “tops” + “+N more”)
+    // ---- Summaries for every day in range (inclusive)
     const days: DaySummary[] = [];
     const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
     while (cursor <= to) {
       const ymd = localYmd(cursor);
-      const list = (byDay.get(ymd) || []).slice().sort((a, b) => +new Date(a.start) - +new Date(b.start));
+      const list = (byDay.get(ymd) || []).slice().sort(function (a, b) {
+        return +new Date(a.start) - +new Date(b.start);
+      });
       const tops = list.slice(0, 2);
       const moreCount = Math.max(0, list.length - tops.length);
       days.push({ date: ymd, tops, moreCount });
@@ -106,15 +105,15 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(
       {
-        city: { host: city.host, name: `${city.city}, ${city.state}` },
-        from: toISO(from),
-        to: toISO(to),
-        days: days.sort((a, b) => a.date.localeCompare(b.date)),
+        from: toLocalISODate(from),
+        to: toLocalISODate(to),
+        days: days.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; }),
       },
       { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" } }
     );
   } catch {
-    // Never crash: return empty structure
+    // Fail-soft: return empty calendar structure
     return NextResponse.json({ days: [] }, { status: 200 });
   }
 }
+
