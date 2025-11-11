@@ -25,14 +25,16 @@ const toTmISO = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z"); // TM di
 const SALES_NEGATIVE = [
   "sale","sales","percent off","% off","off%","discount","deal","deals",
   "bogo","clearance","coupon","promo","promotion","grand opening",
-  "blowout","doorbuster","black friday","cyber monday"
+  "blowout","doorbuster","black friday","cyber monday","two for one",
+  "kids eat free","happy hour"
 ];
 const isRetailish = (t = "") => SALES_NEGATIVE.some(w => t.toLowerCase().includes(w));
 
-/** Normalize titles so tiny differences don't bypass dedupe */
+/** Base normalization */
 function normalizeTitle(t = "") {
   return t
     .toLowerCase()
+    .replace(/&/g, " and ")
     .replace(/\s+vs\.\s+/g, " vs ")
     .replace(/\s+vs\s+/g, " vs ")
     .replace(/\s+at\s+/g, " at ")
@@ -42,7 +44,7 @@ function normalizeTitle(t = "") {
     .trim();
 }
 
-/** Try to canonicalize sports matchups so "Utah Jazz vs Mavericks" === "Mavericks at Utah Jazz" */
+/** Try to canonicalize sports matchups so "A vs B" === "B at A" */
 function sportsKey(title = ""): string | null {
   const t = normalizeTitle(title);
   const m = t.match(/(.+?)\s+(?:vs|at)\s+(.+)/i);
@@ -51,6 +53,30 @@ function sportsKey(title = ""): string | null {
   const b = m[2].trim();
   const parts = [a, b].sort((x, y) => x.localeCompare(y));
   return `sports:${parts[0]}__${parts[1]}`;
+}
+
+/** Token Jaccard (for 90% near-duplicate collapsing) */
+const STOP = new Set([
+  "the","a","an","and","of","in","at","on","for","with","to","from","by",
+  "live","tour","show","concert","game","match","vs","at","night","festival",
+  "dj","band","orchestra","symphony","present","presents"
+]);
+function tokenize(t = ""): Set<string> {
+  const s = normalizeTitle(t).replace(/[^a-z0-9\s]/g, " ");
+  const tok = s.split(/\s+/).filter(w => w && !STOP.has(w) && w.length > 2);
+  return new Set(tok);
+}
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size && !b.size) return 1;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  const union = a.size + b.size - inter;
+  return union ? inter / union : 0;
+}
+function nearDuplicateTitle(a: string, b: string, threshold = 0.9): boolean {
+  const A = tokenize(a);
+  const B = tokenize(b);
+  return jaccard(A, B) >= threshold;
 }
 
 /** YYYY-MM-DD in local time from ISO */
@@ -62,32 +88,38 @@ function dayKeyLocal(iso: string) {
   return `${y}-${m}-${day}`;
 }
 
-/**
- * Same-day dedupe:
- * - If sportsKey exists, use that so "A vs B" == "B at A"
- * - Else use normalized title + address
- * Keep earliest start.
- */
-function dedupeSameDay(events: RawEvent[]) {
-  const keep = new Map<string, RawEvent>(); // key = `${day}|<canon>`
+/** Same-day dedupe with sportsKey + 90% fuzzy title */
+function dedupeDaywise(events: RawEvent[]) {
+  const buckets = new Map<string, RawEvent[]>(); // day -> kept list
   for (const ev of events) {
     if (!ev.start || !ev.title) continue;
     const day = dayKeyLocal(ev.start);
+    const list = buckets.get(day) || [];
     const skey = sportsKey(ev.title);
-    const canon = skey || `${normalizeTitle(ev.title)}|${(ev.address || "").toLowerCase().trim()}`;
-    const key = `${day}|${canon}`;
-    const existing = keep.get(key);
-    if (!existing) keep.set(key, ev);
-    else {
-      const a = new Date(existing.start).getTime();
-      const b = new Date(ev.start).getTime();
-      if (b < a) keep.set(key, ev);
+
+    let merged = false;
+    for (let i = 0; i < list.length; i++) {
+      const cur = list[i];
+      const curS = sportsKey(cur.title);
+      const sportsMatch = skey && curS && skey === curS;
+      const fuzzyMatch = nearDuplicateTitle(cur.title, ev.title, 0.9);
+
+      if (sportsMatch || fuzzyMatch) {
+        // keep earliest start
+        if (new Date(ev.start).getTime() < new Date(cur.start).getTime()) {
+          list[i] = ev;
+        }
+        merged = true;
+        break;
+      }
     }
+    if (!merged) list.push(ev);
+    buckets.set(day, list);
   }
-  return Array.from(keep.values());
+  return Array.from(buckets.values()).flat();
 }
 
-// allow up to 12 months
+// clamp range to maxDays
 function clampRange(from: Date, to: Date, maxDays = 365) {
   const maxTo = new Date(from.getTime() + maxDays * DAY_MS);
   return to.getTime() > maxTo.getTime() ? maxTo : to;
@@ -302,7 +334,7 @@ export async function GET(req: Request) {
       CITIES.find(c => rawHost && rawHost.includes(c.host)) ||
       CITIES[0];
 
-    // Fetch ICS + Ticketmaster + Eventbrite (all optional-safe)
+    // Fetch ICS + Ticketmaster + Eventbrite
     const [icsArrays, tm, eb] = await Promise.all([
       Promise.all((city.icsFeeds || []).map(u => fetchICS(u))),
       fetchTicketmasterAll(city.city, city.lat, city.lon, rangeFrom, rangeTo, city.eventRadiusMiles ?? 25),
@@ -310,12 +342,12 @@ export async function GET(req: Request) {
     ]);
     const ics = icsArrays.flat();
 
-    // Merge (no extra re-filter), remove retail promos, dedupe same-day
+    // Merge + filter + fuzzy dedupe (per day)
     const merged = [...ics, ...tm.events, ...eb]
       .filter(e => !!e.start && !!e.title)
       .filter(e => !isRetailish(e.title || ""));
 
-    const unique = dedupeSameDay(merged);
+    const unique = dedupeDaywise(merged);
 
     const events = unique
       .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
@@ -325,7 +357,7 @@ export async function GET(req: Request) {
     if (!full) {
       // Priority classifiers
       const isSports = (t = "") =>
-        /\b(vs\.?|game|match|basketball|football|hockey|soccer|baseball|nba|nfl|nhl|mls|ncaa|jazz|grizzlies|utah jazz|delta center|arena|stadium)\b/i.test(t);
+        /\b(vs\.?|game|match|basketball|football|hockey|soccer|baseball|nba|nfl|nhl|mls|ncaa|arena|stadium|center)\b/i.test(t);
       const isConcert = (t = "") =>
         /\b(concert|live|tour|orchestra|symphony|band|dj|music|festival)\b/i.test(t);
 
@@ -340,7 +372,7 @@ export async function GET(req: Request) {
         buckets.get(k)!.push(ev);
       }
 
-      // Build per-day summary: up to two tops only if sports/concerts exist; otherwise one
+      // Build per-day summary from already-deduped lists
       const days = Array.from(buckets.entries())
         .map(([date, arr]) => {
           const sorted = [...arr].sort(sortByStart);
@@ -355,7 +387,7 @@ export async function GET(req: Request) {
             tops = sorted.slice(0, 1);
           }
 
-          const moreCount = Math.max(0, arr.length - tops.length);
+          const moreCount = Math.max(0, sorted.length - tops.length);
           return { date, tops, moreCount };
         })
         .sort((a, b) => a.date.localeCompare(b.date));
