@@ -14,6 +14,12 @@ type ApiEvent = {
   source?: string;   // "Ticketmaster" | "ICS"
 };
 
+type DaySummary = {
+  date: string;      // YYYY-MM-DD
+  top: ApiEvent;     // single top event to render in grid
+  moreCount: number; // number of additional events (not yet loaded)
+};
+
 /* ---------- tiny date utils (no libs) ---------- */
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date)   { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
@@ -28,46 +34,34 @@ function sameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-/* ---------- pick the "top" event for a day ---------- */
-function pickTopEvent(dayEvents: ApiEvent[]): ApiEvent | null {
-  if (!dayEvents.length) return null;
-
-  // 1) prefer Ticketmaster over ICS (usually richer, real-world events)
-  const tm = dayEvents.filter(e => (e.source || '').toLowerCase().includes('ticketmaster'));
-  const pool = tm.length ? tm : dayEvents;
-
-  // 2) earliest start time of that day wins
-  const sorted = [...pool].sort(
-    (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
-  );
-  return sorted[0] || null;
-}
-
 const WINDOW_MONTHS_AHEAD = 2; // visible month + 2 months (keeps payload small)
 
 export default function Calendar() {
   const [visibleMonth, setVisibleMonth] = useState<Date>(() => startOfMonth(new Date()));
-  const [events, setEvents] = useState<ApiEvent[]>([]);
+  const [daysSummary, setDaysSummary] = useState<DaySummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [host, setHost] = useState('');
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
 
+  // Per-day lazy cache once opened: { 'YYYY-MM-DD': ApiEvent[] | 'loading' | 'error' }
+  const [dayEvents, setDayEvents] = useState<Record<string, ApiEvent[] | 'loading' | 'error'>>({});
+
   useEffect(() => { if (typeof window !== 'undefined') setHost(window.location.hostname); }, []);
   const city = getCityFromHost(host);
 
-  // Fetch only 3 months (visible -> +2)
-  async function fetchRangeForMonth(anchorMonth: Date) {
+  // Fetch summary for visibleMonth → +2 months
+  async function fetchSummary(anchorMonth: Date) {
     try {
       setLoading(true);
       const from = startOfMonth(anchorMonth);
       const to = endOfMonth(addMonths(anchorMonth, WINDOW_MONTHS_AHEAD));
       const url = `/api/events?host=${encodeURIComponent(city.host)}&from=${formatYMD(from)}&to=${formatYMD(to)}`;
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetch(url, { cache: 'force-cache' });
       const data = await res.json();
-      setEvents(Array.isArray(data.events) ? data.events : []);
+      setDaysSummary(Array.isArray(data.days) ? data.days : []);
     } catch (e) {
       console.error(e);
-      setEvents([]);
+      setDaysSummary([]);
     } finally {
       setLoading(false);
     }
@@ -76,31 +70,26 @@ export default function Calendar() {
   // initial load
   useEffect(() => {
     if (!city) return;
-    fetchRangeForMonth(visibleMonth);
+    fetchSummary(visibleMonth);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [city.host]);
 
-  // when user changes month, refetch that month -> +2 months
+  // when user changes month, refetch summary for that month -> +2 months
   useEffect(() => {
     if (!city) return;
-    fetchRangeForMonth(visibleMonth);
+    fetchSummary(visibleMonth);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleMonth.getFullYear(), visibleMonth.getMonth()]);
 
-  // bucket events by day
-  const eventsByDay = useMemo(() => {
-    const map = new Map<string, ApiEvent[]>();
-    for (const ev of events) {
-      const d = new Date(ev.start);
-      const key = formatYMD(d);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(ev);
-    }
+  // Build a Map for quick lookup by date
+  const summaryByDate = useMemo(() => {
+    const map = new Map<string, DaySummary>();
+    for (const d of daysSummary) map.set(d.date, d);
     return map;
-  }, [events]);
+  }, [daysSummary]);
 
   // build grid for visible month (with spillover days)
-  const days = useMemo(() => {
+  const daysGrid = useMemo(() => {
     const start = startOfMonth(visibleMonth);
     const end = endOfMonth(visibleMonth);
 
@@ -118,6 +107,20 @@ export default function Calendar() {
   }, [visibleMonth]);
 
   const today = new Date();
+
+  // Lazy-load a day's full list when opening the drawer
+  async function ensureDayLoaded(dateStr: string) {
+    if (dayEvents[dateStr] && dayEvents[dateStr] !== 'error') return;
+    setDayEvents(prev => ({ ...prev, [dateStr]: 'loading' }));
+    try {
+      const res = await fetch(`/api/events/${dateStr}?host=${encodeURIComponent(city.host)}`, { cache: 'force-cache' });
+      const json = await res.json();
+      const list: ApiEvent[] = Array.isArray(json.events) ? json.events : [];
+      setDayEvents(prev => ({ ...prev, [dateStr]: list }));
+    } catch {
+      setDayEvents(prev => ({ ...prev, [dateStr]: 'error' }));
+    }
+  }
 
   return (
     <div className="card p-4 md:p-5">
@@ -164,17 +167,19 @@ export default function Calendar() {
 
       {/* Calendar grid — show ONLY top event per day (+N more) */}
       <div className="grid grid-cols-7 gap-[2px] md:gap-1">
-        {days.map(({ date, inMonth }) => {
+        {daysGrid.map(({ date, inMonth }) => {
           const key = formatYMD(date);
-          const dayEvents = eventsByDay.get(key) || [];
-          const top = pickTopEvent(dayEvents);
+          const s = summaryByDate.get(key);
           const isToday = sameDay(date, today);
-          const restCount = Math.max(0, dayEvents.length - (top ? 1 : 0));
+          const totalCount = s ? 1 + s.moreCount : 0;
 
           return (
             <button
               key={key}
-              onClick={() => setSelectedDate(date)}
+              onClick={async () => {
+                setSelectedDate(date);
+                await ensureDayLoaded(key);
+              }}
               className={[
                 "rounded-lg border text-left px-2 py-1 md:px-2 md:py-2 transition",
                 "min-h-[64px] md:min-h-[80px]",
@@ -186,21 +191,21 @@ export default function Calendar() {
                 <span className={`text-[11px] md:text-xs ${inMonth ? "text-gray-200" : "text-gray-500"}`}>
                   {date.getDate()}
                 </span>
-                {!!dayEvents.length && (
+                {!!totalCount && (
                   <span className="text-[10px] md:text-[11px] px-2 py-[2px] rounded bg-gray-800 border border-gray-700 text-gray-200">
-                    {dayEvents.length}
+                    {totalCount}
                   </span>
                 )}
               </div>
 
               {/* Only the top event line */}
-              {top ? (
+              {s?.top ? (
                 <div className="mt-1 space-y-1">
                   <div className="truncate text-[10px] md:text-[11px] text-gray-100 font-medium">
-                    • {top.title}
+                    • {s.top.title}
                   </div>
-                  {restCount > 0 && (
-                    <div className="text-[10px] text-gray-500">+{restCount} more</div>
+                  {s.moreCount > 0 && (
+                    <div className="text-[10px] text-gray-500">+{s.moreCount} more</div>
                   )}
                 </div>
               ) : (
@@ -213,10 +218,10 @@ export default function Calendar() {
 
       {/* Footer status */}
       <div className="mt-3 text-xs text-gray-400">
-        {loading ? "Loading events…" : `${events.length} events loaded in 3-month window`}
+        {loading ? "Loading events…" : `${daysSummary.length} days loaded in 3-month window`}
       </div>
 
-      {/* Selected day drawer with full list */}
+      {/* Selected day drawer with full list (lazy loaded) */}
       {selectedDate && (
         <div className="mt-4 p-3 rounded-xl bg-gray-900/70 border border-gray-800">
           <div className="flex items-center justify-between">
@@ -230,29 +235,44 @@ export default function Calendar() {
               Close
             </button>
           </div>
-          <div className="mt-2 space-y-2">
-            {(eventsByDay.get(formatYMD(selectedDate)) || [])
-              .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
-              .map(ev => (
-                <a
-                  key={ev.id}
-                  className="block rounded-lg border border-gray-800 bg-gray-900/60 p-3 hover:bg-gray-900/80"
-                  href={ev.url || '#'}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <div className="text-sm font-medium">{ev.title}</div>
-                  <div className="text-xs text-gray-400">
-                    {new Date(ev.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                    {ev.venue ? ` • ${ev.venue}` : ''}
-                    {ev.source ? ` • ${ev.source}` : ''}
-                  </div>
-                </a>
-            ))}
-            {!(eventsByDay.get(formatYMD(selectedDate)) || []).length && (
-              <div className="text-xs text-gray-500">No events for this day.</div>
-            )}
-          </div>
+
+          {(() => {
+            const key = formatYMD(selectedDate);
+            const state = dayEvents[key];
+            if (state === 'loading' || (!state && (summaryByDate.get(key)?.moreCount ?? 0) > 0)) {
+              return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
+            }
+            if (state === 'error') {
+              return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
+            }
+            const list: ApiEvent[] =
+              Array.isArray(state) ? state :
+              (summaryByDate.get(key)?.top ? [summaryByDate.get(key)!.top] : []);
+            const uniqueSorted = [...list].sort((a,b)=> new Date(a.start).getTime() - new Date(b.start).getTime());
+
+            return (
+              <div className="mt-2 space-y-2">
+                {uniqueSorted.length > 0 ? uniqueSorted.map(ev => (
+                  <a
+                    key={ev.id}
+                    className="block rounded-lg border border-gray-800 bg-gray-900/60 p-3 hover:bg-gray-900/80"
+                    href={ev.url || '#'}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <div className="text-sm font-medium">{ev.title}</div>
+                    <div className="text-xs text-gray-400">
+                      {new Date(ev.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                      {ev.venue ? ` • ${ev.venue}` : ''}
+                      {ev.source ? ` • ${ev.source}` : ''}
+                    </div>
+                  </a>
+                )) : (
+                  <div className="text-xs text-gray-500">No events for this day.</div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
