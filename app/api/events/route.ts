@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { CITIES } from "@/lib/cities";
 
+/** Ensure env vars (like TICKETMASTER_KEY) are available */
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 type RawEvent = {
   id: string;
   title: string;
@@ -34,7 +38,7 @@ const dedupe = (events: RawEvent[]) => {
   });
 };
 
-/* ---------- ICS parsing (robust to CRLF + folded lines + TZID) ---------- */
+/* ---------- ICS parsing ---------- */
 function unfoldICS(text: string) {
   return text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "");
 }
@@ -43,7 +47,6 @@ function pick(line: string, blob: string) {
   return re.exec(blob)?.[1]?.trim();
 }
 function icsToISO(s: string) {
-  // 20250110T183000Z | 20250110T183000 | 20250110
   if (/^\d{8}T\d{6}Z$/.test(s)) return new Date(s).toISOString();
   if (/^\d{8}T\d{6}$/.test(s)) {
     const y=s.slice(0,4), m=s.slice(4,6), d=s.slice(6,8), h=s.slice(9,11), mi=s.slice(11,13), se=s.slice(13,15);
@@ -85,7 +88,7 @@ async function fetchICS(url: string): Promise<RawEvent[]> {
   } catch { return []; }
 }
 
-/* ---------- Ticketmaster via LAT/LONG (reliable) ---------- */
+/* ---------- Ticketmaster via LAT/LONG ---------- */
 async function fetchTicketmasterByLatLng(
   lat: number,
   lon: number,
@@ -94,7 +97,8 @@ async function fetchTicketmasterByLatLng(
   radiusMiles = 25
 ): Promise<RawEvent[]> {
   const key = process.env.TICKETMASTER_KEY;
-  if (!key) return [];
+  if (!key) return [];            // if key unavailable, return empty
+
   try {
     const qs = new URLSearchParams({
       apikey: key,
@@ -111,21 +115,25 @@ async function fetchTicketmasterByLatLng(
     const res = await fetch(url, { cache: "no-store" });
     const data = await res.json();
     const list = data?._embedded?.events || [];
-    return list.map((ev: any) => {
-      const when = ev.dates?.start?.dateTime || ev.dates?.start?.localDate;
-      const venue = ev._embedded?.venues?.[0];
-      return {
-        id: `tm:${ev.id}`,
-        title: ev.name,
-        start: when ? new Date(when).toISOString() : undefined,
-        venue: venue?.name,
-        address: [venue?.address?.line1, venue?.city?.name].filter(Boolean).join(", "),
-        source: "Ticketmaster",
-        url: ev.url,
-        free: false,
-      } as RawEvent;
-    }).filter((e: RawEvent) => !!e.start);
-  } catch { return []; }
+    return list
+      .map((ev: any) => {
+        const when = ev.dates?.start?.dateTime || ev.dates?.start?.localDate;
+        const venue = ev._embedded?.venues?.[0];
+        return {
+          id: `tm:${ev.id}`,
+          title: ev.name,
+          start: when ? new Date(when).toISOString() : undefined,
+          venue: venue?.name,
+          address: [venue?.address?.line1, venue?.city?.name].filter(Boolean).join(", "),
+          source: "Ticketmaster",
+          url: ev.url,
+          free: false,
+        } as RawEvent;
+      })
+      .filter((e: RawEvent) => !!e.start);
+  } catch {
+    return [];
+  }
 }
 
 /* ---------- API ---------- */
@@ -134,8 +142,9 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const cityHost = (url.searchParams.get("cityHost") || "").toLowerCase();
     const rawHost  = (url.searchParams.get("host") || "").toLowerCase();
+    const debug    = url.searchParams.get("debug") === "1";
 
-    // Default: show last week -> next 120 days (so you see something immediately)
+    // Default: last week -> next 120 days
     const fromParam = url.searchParams.get("from");
     const toParam   = url.searchParams.get("to");
     const rangeFrom = fromParam ? new Date(fromParam) : new Date(Date.now() - 7 * DAY_MS);
@@ -165,13 +174,17 @@ export async function GET(req: Request) {
       .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
       .slice(0, 300);
 
-    return NextResponse.json({
+    const payload: any = {
       city: { host: city.host, name: `${city.city}, ${city.state}` },
       from: rangeFrom.toISOString(),
       to: rangeTo.toISOString(),
       count: events.length,
       events
-    });
+    };
+    if (debug) {
+      payload.tmKeyPresent = !!process.env.TICKETMASTER_KEY;
+    }
+    return NextResponse.json(payload);
   } catch {
     return NextResponse.json({ events: [] }, { status: 200 });
   }
