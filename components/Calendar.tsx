@@ -17,7 +17,7 @@ type ApiEvent = {
 type DaySummary = {
   date: string;       // YYYY-MM-DD
   tops: ApiEvent[];   // 1 or 2 (sports/concerts prioritized)
-  moreCount: number;  // remaining events not included in tops
+  moreCount: number;  // remaining events not included in tops (estimated before exact fetch)
 };
 
 /* tiny utils */
@@ -45,6 +45,8 @@ export default function Calendar() {
 
   // lazy cache for drawer
   const [dayEvents, setDayEvents] = useState<Record<string, ApiEvent[] | 'loading' | 'error'>>({});
+  // exact totals (override the estimate when available)
+  const [dayTotals, setDayTotals] = useState<Record<string, number>>({});
 
   useEffect(() => { if (typeof window !== 'undefined') setHost(window.location.hostname); }, []);
   const city = getCityFromHost(host);
@@ -90,10 +92,10 @@ export default function Calendar() {
 
   const today = new Date();
 
-  // Robust loader: try /api/events/[date]; on failure, fall back to full=1 day query
-  async function ensureDayLoaded(dateStr: string, moreCount: number) {
-    if (moreCount <= 0) return; // nothing else to load
-    if (dayEvents[dateStr] && dayEvents[dateStr] !== 'error') return;
+  // Robust loader: always prefer exact per-day list. If per-day route fails, fall back to full=1 day query.
+  async function ensureDayLoaded(dateStr: string) {
+    if (Array.isArray(dayEvents[dateStr])) return;
+
     setDayEvents(prev => ({ ...prev, [dateStr]: 'loading' }));
     try {
       const res = await fetch(`/api/events/${dateStr}?host=${encodeURIComponent(city.host)}`, { cache: 'force-cache' });
@@ -101,6 +103,7 @@ export default function Calendar() {
       const json = await res.json();
       const list: ApiEvent[] = Array.isArray(json.events) ? json.events : [];
       setDayEvents(prev => ({ ...prev, [dateStr]: list }));
+      setDayTotals(prev => ({ ...prev, [dateStr]: list.length }));
     } catch {
       try {
         const res2 = await fetch(`/api/events?full=1&host=${encodeURIComponent(city.host)}&from=${dateStr}&to=${dateStr}`, { cache: 'force-cache' });
@@ -108,6 +111,7 @@ export default function Calendar() {
         const all: ApiEvent[] = Array.isArray(json2.events) ? json2.events : [];
         const list = all.filter(e => e.start.slice(0,10) === dateStr);
         setDayEvents(prev => ({ ...prev, [dateStr]: list }));
+        setDayTotals(prev => ({ ...prev, [dateStr]: list.length }));
       } catch {
         setDayEvents(prev => ({ ...prev, [dateStr]: 'error' }));
       }
@@ -149,14 +153,22 @@ export default function Calendar() {
           const key = formatYMD(date);
           const s = summaryByDate.get(key);
           const isToday = sameDay(date, today);
-          const badgeCount = s ? s.tops.length + s.moreCount : 0;
+
+          // Estimated total from summary, overridden by exact total once fetched
+          const estimatedTotal = s ? s.tops.length + s.moreCount : 0;
+          const exactTotal = dayTotals[key];
+          const totalForBadge = exactTotal !== undefined ? exactTotal : estimatedTotal;
+
+          // "+N more" text: N = total - shown lines (tops length from summary)
+          const shownLines = s?.tops?.length ?? 0;
+          const moreCount = Math.max(0, (exactTotal !== undefined ? exactTotal : estimatedTotal) - shownLines);
 
           return (
             <button
               key={key}
               onClick={async () => {
                 setSelectedDate(date);
-                await ensureDayLoaded(key, s?.moreCount ?? 0);
+                await ensureDayLoaded(key);
               }}
               className={[
                 "rounded-lg border text-left px-2 py-1 md:px-2 md:py-2 transition",
@@ -167,14 +179,14 @@ export default function Calendar() {
             >
               <div className="flex items-center justify-between">
                 <span className={`text-[11px] md:text-xs ${inMonth ? "text-gray-200" : "text-gray-500"}`}>{date.getDate()}</span>
-                {!!badgeCount && (
+                {!!totalForBadge && (
                   <span className="text-[10px] md:text-[11px] px-2 py-[2px] rounded bg-gray-800 border border-gray-700 text-gray-200">
-                    {badgeCount}
+                    {totalForBadge}
                   </span>
                 )}
               </div>
 
-              {/* Up to two priority lines (sports/concerts) returned by the API */}
+              {/* Up to two priority lines (sports/concerts) returned by the summary */}
               {s?.tops?.length ? (
                 <div className="mt-1 space-y-1">
                   {s.tops.slice(0, 2).map(ev => (
@@ -182,8 +194,8 @@ export default function Calendar() {
                       • {ev.title}
                     </div>
                   ))}
-                  {s.moreCount > 0 && (
-                    <div className="text-[10px] text-gray-500">+{s.moreCount} more</div>
+                  {moreCount > 0 && (
+                    <div className="text-[10px] text-gray-500">+{moreCount} more</div>
                   )}
                 </div>
               ) : (
@@ -214,36 +226,13 @@ export default function Calendar() {
             const s = summaryByDate.get(key);
             const state = dayEvents[key];
 
-            // Start with the tops we already have
-            const base = s?.tops ?? [];
-            let list: ApiEvent[] = base;
+            // Prefer exact per-day list entirely when available; otherwise fall back to summary tops
+            const list: ApiEvent[] =
+              Array.isArray(state) ? state :
+              (s?.tops ?? []);
 
-            // Append lazily loaded others if any
-            if (s && s.moreCount > 0) {
-              if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
-              if (state === 'error') {
-                // Show the summary lines without error noise
-                return (
-                  <div className="mt-2 space-y-2">
-                    {base.map(ev => (
-                      <a key={ev.id}
-                         className="block rounded-lg border border-gray-800 bg-gray-900/60 p-3 hover:bg-gray-900/80"
-                         href={ev.url || '#'} target="_blank" rel="noreferrer">
-                        <div className="text-sm font-medium">{ev.title}</div>
-                        <div className="text-xs text-gray-400">
-                          {new Date(ev.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                          {ev.venue ? ` • ${ev.venue}` : ''}{ev.source ? ` • ${ev.source}` : ''}
-                        </div>
-                      </a>
-                    ))}
-                  </div>
-                );
-              }
-              if (Array.isArray(state)) {
-                const seen = new Set(base.map(e => e.id));
-                list = [...base, ...state.filter(e => !seen.has(e.id))];
-              }
-            }
+            if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
+            if (!list.length && state === 'error') return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
 
             const sorted = [...list].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
 
