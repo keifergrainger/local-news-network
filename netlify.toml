@@ -1,0 +1,7 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# Pin the Next.js plugin to v4 so Netlify Forms works with your current code.
+[[plugins]]
+  package = "@netlify/plugin-nextjs@4"
