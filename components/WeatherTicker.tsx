@@ -12,6 +12,8 @@ type Wx = {
   updatedISO: string;
 };
 
+type Headline = { title: string; link: string; pubDate?: string };
+
 function codeToText(code: number) {
   if (code === 0) return 'Clear';
   if ([1, 2].includes(code)) return 'Partly Cloudy';
@@ -34,11 +36,12 @@ function degToCompass(deg: number) {
 export default function WeatherTicker() {
   const [host, setHost] = useState('');
   const [wx, setWx] = useState<Wx | null>(null);
+  const [news, setNews] = useState<Headline[]>([]);
 
   useEffect(() => { if (typeof window !== 'undefined') setHost(window.location.hostname); }, []);
   const city = getCityFromHost(host);
 
-  // fetch weather (F + mph + local timezone)
+  // Weather: F + mph + local timezone
   useEffect(() => {
     async function fetchWx() {
       try {
@@ -62,27 +65,40 @@ export default function WeatherTicker() {
     return () => clearInterval(id);
   }, [city.lat, city.lon]);
 
-  // build items: Weather + Breaking headlines from city config
+  // Headlines: from /api/news (based on host/city)
+  useEffect(() => {
+    async function fetchNews() {
+      try {
+        if (!host) return;
+        const res = await fetch(`/api/news?host=${encodeURIComponent(host)}`, { cache: 'no-store' });
+        const data = await res.json();
+        setNews(Array.isArray(data.headlines) ? data.headlines : []);
+      } catch (e) { console.error(e); }
+    }
+    fetchNews();
+    const id = setInterval(fetchNews, 15 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [host]);
+
+  // Build items: Weather + top headlines
   const items: string[] = useMemo(() => {
     const wxLine = wx
       ? `🌤 ${city.city}, ${city.state} • ${codeToText(wx.code)} • ${Math.round(wx.temp)}°F (feels ${Math.round(wx.feels)}°) • Humidity ${Math.round(wx.humidity)}% • Wind ${Math.round(wx.wind)} mph ${degToCompass(wx.windDir)} • Updated ${new Date(wx.updatedISO).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
       : `Loading weather for ${city.city}…`;
 
-    const breaking = (city as any).breaking as string[] | undefined;
-    const news = breaking && breaking.length
-      ? breaking.map(t => `⚡ ${t}`)
+    const newsLines = news.length
+      ? news.map(h => `⚡ ${h.title}`)
       : [`💡 Got news or an event? Submit it on /submit`];
 
-    return [wxLine, ...news];
-  }, [wx, city]);
+    return [wxLine, ...newsLines];
+  }, [wx, news, city]);
 
-  // repeat enough to span any screen width for continuous scroll
+  // Make a very long line for smooth continuous scroll
   const longLine = useMemo(() => {
     const base = items.join('   •   ');
-    return Array(8).fill(base).join('     ');
+    return Array(10).fill(base).join('     ');
   }, [items]);
 
-  // full-width bar (no container)
   return (
     <div className="w-full bg-gradient-to-r from-black/70 via-black/60 to-black/70 border-b border-gray-800">
       <div className="py-2 text-[11px] sm:text-sm text-gray-100">
