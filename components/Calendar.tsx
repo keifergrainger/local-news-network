@@ -6,21 +6,21 @@ import { getCityFromHost } from '@/lib/cities';
 type ApiEvent = {
   id: string;
   title: string;
-  start: string;     // ISO
+  start: string;
   end?: string;
   venue?: string;
   address?: string;
   url?: string;
-  source?: string;   // "Ticketmaster" | "ICS"
+  source?: string;
 };
 
 type DaySummary = {
-  date: string;      // YYYY-MM-DD
-  top: ApiEvent;     // single top event to render in grid
-  moreCount: number; // number of additional events (not yet loaded)
+  date: string;       // YYYY-MM-DD
+  tops: ApiEvent[];   // 1 or 2 (sports/concerts prioritized)
+  moreCount: number;  // remaining events not included in tops
 };
 
-/* ---------- tiny date utils (no libs) ---------- */
+/* tiny utils */
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date)   { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
 function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getMonth() + m, d.getDate()); }
@@ -34,7 +34,7 @@ function sameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-const WINDOW_MONTHS_AHEAD = 2; // visible month + 2 months (keeps payload small)
+const WINDOW_MONTHS_AHEAD = 2;
 
 export default function Calendar() {
   const [visibleMonth, setVisibleMonth] = useState<Date>(() => startOfMonth(new Date()));
@@ -43,13 +43,12 @@ export default function Calendar() {
   const [host, setHost] = useState('');
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
 
-  // Per-day lazy cache once opened: { 'YYYY-MM-DD': ApiEvent[] | 'loading' | 'error' }
+  // lazy cache for drawer
   const [dayEvents, setDayEvents] = useState<Record<string, ApiEvent[] | 'loading' | 'error'>>({});
 
   useEffect(() => { if (typeof window !== 'undefined') setHost(window.location.hostname); }, []);
   const city = getCityFromHost(host);
 
-  // Fetch summary for visibleMonth → +2 months
   async function fetchSummary(anchorMonth: Date) {
     try {
       setLoading(true);
@@ -59,46 +58,29 @@ export default function Calendar() {
       const res = await fetch(url, { cache: 'force-cache' });
       const data = await res.json();
       setDaysSummary(Array.isArray(data.days) ? data.days : []);
-    } catch (e) {
-      console.error(e);
+    } catch {
       setDaysSummary([]);
     } finally {
       setLoading(false);
     }
   }
 
-  // initial load
-  useEffect(() => {
-    if (!city) return;
-    fetchSummary(visibleMonth);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [city.host]);
+  useEffect(() => { if (city) fetchSummary(visibleMonth); /* eslint-disable */ }, [city?.host]);
+  useEffect(() => { if (city) fetchSummary(visibleMonth); /* eslint-disable */ }, [visibleMonth.getFullYear(), visibleMonth.getMonth()]);
 
-  // when user changes month, refetch summary for that month -> +2 months
-  useEffect(() => {
-    if (!city) return;
-    fetchSummary(visibleMonth);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleMonth.getFullYear(), visibleMonth.getMonth()]);
-
-  // Build a Map for quick lookup by date
   const summaryByDate = useMemo(() => {
     const map = new Map<string, DaySummary>();
     for (const d of daysSummary) map.set(d.date, d);
     return map;
   }, [daysSummary]);
 
-  // build grid for visible month (with spillover days)
   const daysGrid = useMemo(() => {
     const start = startOfMonth(visibleMonth);
     const end = endOfMonth(visibleMonth);
-
-    const startIdx = start.getDay(); // 0=Sun..6=Sat
+    const startIdx = start.getDay();
     const endIdx = end.getDay();
-
     const gridStart = new Date(start); gridStart.setDate(start.getDate() - startIdx);
     const gridEnd   = new Date(end);   gridEnd.setDate(end.getDate() + (6 - endIdx));
-
     const cells: { date: Date; inMonth: boolean }[] = [];
     for (let d = new Date(gridStart); d <= gridEnd; d.setDate(d.getDate() + 1)) {
       cells.push({ date: new Date(d), inMonth: d.getMonth() === visibleMonth.getMonth() });
@@ -108,8 +90,8 @@ export default function Calendar() {
 
   const today = new Date();
 
-  // Lazy-load a day's full list when opening the drawer
-  async function ensureDayLoaded(dateStr: string) {
+  async function ensureDayLoaded(dateStr: string, moreCount: number) {
+    if (moreCount <= 0) return; // nothing else to load
     if (dayEvents[dateStr] && dayEvents[dateStr] !== 'error') return;
     setDayEvents(prev => ({ ...prev, [dateStr]: 'loading' }));
     try {
@@ -135,26 +117,12 @@ export default function Calendar() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            className="px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-sm"
-            onClick={() => setVisibleMonth(prev => startOfMonth(addMonths(prev, -1)))}
-            aria-label="Previous month"
-          >
-            ‹
-          </button>
-          <button
-            className="px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-sm"
-            onClick={() => setVisibleMonth(startOfMonth(new Date()))}
-          >
-            Today
-          </button>
-          <button
-            className="px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-sm"
-            onClick={() => setVisibleMonth(prev => startOfMonth(addMonths(prev, 1)))}
-            aria-label="Next month"
-          >
-            ›
-          </button>
+          <button className="px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-sm"
+                  onClick={() => setVisibleMonth(prev => startOfMonth(addMonths(prev, -1)))} aria-label="Previous month">‹</button>
+          <button className="px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-sm"
+                  onClick={() => setVisibleMonth(startOfMonth(new Date()))}>Today</button>
+          <button className="px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-sm"
+                  onClick={() => setVisibleMonth(prev => startOfMonth(addMonths(prev, 1)))} aria-label="Next month">›</button>
         </div>
       </div>
 
@@ -165,20 +133,20 @@ export default function Calendar() {
         ))}
       </div>
 
-      {/* Calendar grid — show ONLY top event per day (+N more) */}
+      {/* Grid */}
       <div className="grid grid-cols-7 gap-[2px] md:gap-1">
         {daysGrid.map(({ date, inMonth }) => {
           const key = formatYMD(date);
           const s = summaryByDate.get(key);
           const isToday = sameDay(date, today);
-          const totalCount = s ? 1 + s.moreCount : 0;
+          const badgeCount = s ? s.tops.length + s.moreCount : 0;
 
           return (
             <button
               key={key}
               onClick={async () => {
                 setSelectedDate(date);
-                await ensureDayLoaded(key);
+                await ensureDayLoaded(key, s?.moreCount ?? 0);
               }}
               className={[
                 "rounded-lg border text-left px-2 py-1 md:px-2 md:py-2 transition",
@@ -188,22 +156,22 @@ export default function Calendar() {
               ].join(' ')}
             >
               <div className="flex items-center justify-between">
-                <span className={`text-[11px] md:text-xs ${inMonth ? "text-gray-200" : "text-gray-500"}`}>
-                  {date.getDate()}
-                </span>
-                {!!totalCount && (
+                <span className={`text-[11px] md:text-xs ${inMonth ? "text-gray-200" : "text-gray-500"}`}>{date.getDate()}</span>
+                {!!badgeCount && (
                   <span className="text-[10px] md:text-[11px] px-2 py-[2px] rounded bg-gray-800 border border-gray-700 text-gray-200">
-                    {totalCount}
+                    {badgeCount}
                   </span>
                 )}
               </div>
 
-              {/* Only the top event line */}
-              {s?.top ? (
+              {/* Up to two priority lines (sports/concerts) returned by the API */}
+              {s?.tops?.length ? (
                 <div className="mt-1 space-y-1">
-                  <div className="truncate text-[10px] md:text-[11px] text-gray-100 font-medium">
-                    • {s.top.title}
-                  </div>
+                  {s.tops.slice(0, 2).map(ev => (
+                    <div key={ev.id} className="truncate text-[10px] md:text-[11px] text-gray-100 font-medium">
+                      • {ev.title}
+                    </div>
+                  ))}
                   {s.moreCount > 0 && (
                     <div className="text-[10px] text-gray-500">+{s.moreCount} more</div>
                   )}
@@ -216,55 +184,51 @@ export default function Calendar() {
         })}
       </div>
 
-      {/* Footer status */}
+      {/* Footer */}
       <div className="mt-3 text-xs text-gray-400">
         {loading ? "Loading events…" : `${daysSummary.length} days loaded in 3-month window`}
       </div>
 
-      {/* Selected day drawer with full list (lazy loaded) */}
+      {/* Drawer */}
       {selectedDate && (
         <div className="mt-4 p-3 rounded-xl bg-gray-900/70 border border-gray-800">
           <div className="flex items-center justify-between">
             <h3 className="text-sm md:text-base font-semibold">
               {selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
             </h3>
-            <button
-              className="text-xs text-gray-400 hover:text-gray-200"
-              onClick={() => setSelectedDate(null)}
-            >
-              Close
-            </button>
+            <button className="text-xs text-gray-400 hover:text-gray-200" onClick={() => setSelectedDate(null)}>Close</button>
           </div>
 
           {(() => {
             const key = formatYMD(selectedDate);
+            const s = summaryByDate.get(key);
             const state = dayEvents[key];
-            if (state === 'loading' || (!state && (summaryByDate.get(key)?.moreCount ?? 0) > 0)) {
-              return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
+
+            // Compose the list: start with the tops we already have; append lazy-loaded others if available
+            const base = s?.tops ?? [];
+            let list: ApiEvent[] = base;
+
+            if (s && s.moreCount > 0) {
+              if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
+              if (state === 'error')   return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
+              if (Array.isArray(state)) {
+                const seen = new Set(base.map(e => e.id));
+                list = [...base, ...state.filter(e => !seen.has(e.id))];
+              }
             }
-            if (state === 'error') {
-              return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
-            }
-            const list: ApiEvent[] =
-              Array.isArray(state) ? state :
-              (summaryByDate.get(key)?.top ? [summaryByDate.get(key)!.top] : []);
-            const uniqueSorted = [...list].sort((a,b)=> new Date(a.start).getTime() - new Date(b.start).getTime());
+
+            const sorted = [...list].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
 
             return (
               <div className="mt-2 space-y-2">
-                {uniqueSorted.length > 0 ? uniqueSorted.map(ev => (
-                  <a
-                    key={ev.id}
-                    className="block rounded-lg border border-gray-800 bg-gray-900/60 p-3 hover:bg-gray-900/80"
-                    href={ev.url || '#'}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                {sorted.length > 0 ? sorted.map(ev => (
+                  <a key={ev.id}
+                     className="block rounded-lg border border-gray-800 bg-gray-900/60 p-3 hover:bg-gray-900/80"
+                     href={ev.url || '#'} target="_blank" rel="noreferrer">
                     <div className="text-sm font-medium">{ev.title}</div>
                     <div className="text-xs text-gray-400">
                       {new Date(ev.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                      {ev.venue ? ` • ${ev.venue}` : ''}
-                      {ev.source ? ` • ${ev.source}` : ''}
+                      {ev.venue ? ` • ${ev.venue}` : ''}{ev.source ? ` • ${ev.source}` : ''}
                     </div>
                   </a>
                 )) : (
