@@ -12,20 +12,30 @@ export type CityConfig = {
 
 export const CITIES: CityConfig[] = [
   {
-    host: "saltlakeut.com",
-    city: "Salt Lake City",
-    state: "UT",
-    lat: 40.7608,
-    lon: -111.8910,
-    heroImage:
-      "https://images.unsplash.com/photo-1466285746891-30d1cd3a5400?q=80&w=1600&auto=format&fit=crop",
-    tagline: "Your Local Hub — News & Events in Salt Lake City",
-    rssQueries: [
-      "Salt Lake City Utah news",
-      "Salt Lake County breaking news",
-      "SLC local news"
-    ],
-  },
+  host: "saltlakeut.com",
+  city: "Salt Lake City",
+  state: "UT",
+  lat: 40.7608,
+  lon: -111.8910,
+  heroImage:
+    "https://images.unsplash.com/photo-1466285746891-30d1cd3a5400?q=80&w=1600&auto=format&fit=crop",
+  tagline: "Your Local Hub — News & Events in Salt Lake City",
+
+  // News RSS (leave as-is if you already have this)
+  rssQueries: [
+    `"Salt Lake City" Utah news -Hawaii -HI -Maui -Kahului`,
+    `"Salt Lake County" news -Hawaii -HI -Maui -Kahului`,
+    `"Salt Lake City" local news -Hawaii -HI -Maui -Kahului`
+  ],
+
+  // 👇 NEW: events sources (no API keys required for ICS)
+  eventRadiusMiles: 25,
+  eventbriteTerms: ["Salt Lake City", "SLC", "Salt Lake County"],
+  ticketmasterDMA: "Salt Lake City",
+  icsFeeds: [
+    "https://msd.utah.gov/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar"
+  ],
+},
   {
     host: "irmosc.com",
     city: "Irmo",
