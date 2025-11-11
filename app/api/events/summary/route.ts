@@ -26,14 +26,21 @@ type DaySummary = {
 function pad2(n: number) { return String(n).padStart(2, "0"); }
 function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function toISO(d: Date) {
-  // why: make inclusive ranges stable regardless of server TZ
+  // why: stable inclusive ranges regardless of server TZ
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString();
 }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999); }
+
+// ✔ No /u flag, no \p{…} classes; still normalizes accents and punctuation.
 function norm(s?: string) {
-  // why: robust dedupe across sources
-  return (s || "").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
+  if (!s) return "";
+  return s
+    .normalize("NFKD")                // why: split accents
+    .replace(/[\u0300-\u036f]/g, "")  // why: drop combining marks
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")      // collapse non-alnum
+    .trim();
 }
 
 export async function GET(req: NextRequest) {
@@ -48,7 +55,6 @@ export async function GET(req: NextRequest) {
     const from = fromParam ? new Date(fromParam) : startOfMonth(now);
     const to = toParam ? new Date(toParam) : endOfMonth(now);
 
-    // Reuse your existing collector
     const origin = req.nextUrl.origin;
     const eventsResp = await fetch(
       `${origin}/api/events?from=${encodeURIComponent(toISO(from))}&to=${encodeURIComponent(toISO(to))}`,
@@ -56,14 +62,13 @@ export async function GET(req: NextRequest) {
     );
 
     if (!eventsResp.ok) {
-      // Fail-soft so UI renders even if upstream fails
       return NextResponse.json({ city, from: toISO(from), to: toISO(to), days: [] }, { status: 200 });
     }
 
     const eventsJson: { events?: ApiEvent[] } = await eventsResp.json();
     const raw = Array.isArray(eventsJson.events) ? eventsJson.events : [];
 
-    // --- De-dupe spam: same title + same local day + same venue/address
+    // De-dupe: title + local day + venue/address
     const seen = new Map<string, ApiEvent>();
     for (const e of raw) {
       if (!e?.title || !e?.start) continue;
@@ -73,7 +78,7 @@ export async function GET(req: NextRequest) {
     }
     const deduped = [...seen.values()];
 
-    // --- Group by day
+    // Group by day
     const byDay = new Map<string, ApiEvent[]>();
     for (const e of deduped) {
       const ymd = localYmd(new Date(e.start));
@@ -82,7 +87,7 @@ export async function GET(req: NextRequest) {
       byDay.set(ymd, arr);
     }
 
-    // --- Build summaries (exactly 2 “tops” + “+N more”)
+    // Build summaries (2 tops + +N more)
     const days: DaySummary[] = [];
     const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
     while (cursor <= to) {
@@ -104,8 +109,6 @@ export async function GET(req: NextRequest) {
       { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" } }
     );
   } catch {
-    // Never crash: return empty structure
     return NextResponse.json({ days: [] }, { status: 200 });
   }
 }
-
