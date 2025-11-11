@@ -4,74 +4,91 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCityFromHost } from "@/lib/cities";
 
-/* -------------------- Types -------------------- */
+/** -------- Types -------- */
 type Article = { title?: string; url?: string; publishedAt?: string; source?: string };
 type WeatherNow = {
-  temp?: number;           // °F
-  feelsLike?: number;      // °F
-  wind?: { speed?: number; dir?: number }; // mph + deg
-  humidity?: number;       // %
-  desc?: string;
-  icon?: string;           // optional URL
-  unit?: "F" | "C";
+  temp?: number; feelsLike?: number; wind?: { speed?: number; dir?: number };
+  humidity?: number; desc?: string; icon?: string; unit?: "F" | "C";
 };
 
-/* -------------------- Time helpers -------------------- */
-function startOfTodayLocal() { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
-function endOfTodayLocal()   { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 23, 59, 59, 999); }
+/** -------- Time helpers -------- */
+function startOfTodayLocal() { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 0,0,0,0); }
+function endOfTodayLocal()   { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 23,59,59,999); }
 function isIso(s?: string) { try { return !!s && !Number.isNaN(Date.parse(s)); } catch { return false; } }
 function isTodayLocal(iso?: string) { if (!isIso(iso)) return false; const d = new Date(iso!); return d >= startOfTodayLocal() && d <= endOfTodayLocal(); }
 
-/* -------------------- News helpers -------------------- */
+/** -------- News helpers -------- */
 function keyForArticle(a: Article) { return (a.url || a.title || "").trim().toLowerCase(); }
 function dedupeKeepNewest(list: Article[]) {
   const map = new Map<string, Article>();
   for (let i = 0; i < list.length; i++) {
-    const a = list[i], k = keyForArticle(a); if (!k) continue;
+    const a = list[i]; const k = keyForArticle(a); if (!k) continue;
     const prev = map.get(k);
     if (!prev || (+new Date(a.publishedAt || 0) > +new Date(prev.publishedAt || 0))) map.set(k, a);
   }
   return Array.from(map.values());
 }
+function coerceArticles(j: any): Article[] {
+  // accept many shapes: headlines | articles | news | items | data.*
+  const pools: any[] = [];
+  if (Array.isArray(j?.headlines)) pools.push(j.headlines);
+  if (Array.isArray(j?.articles)) pools.push(j.articles);
+  if (Array.isArray(j?.news)) pools.push(j.news);
+  if (Array.isArray(j?.items)) pools.push(j.items);
+  if (Array.isArray(j?.data?.headlines)) pools.push(j.data.headlines);
+  if (Array.isArray(j?.data?.articles)) pools.push(j.data.articles);
+  if (Array.isArray(j?.data?.items)) pools.push(j.data.items);
+  const merged: any[] = pools.flat();
 
-/* -------------------- Weather helpers -------------------- */
+  const out: Article[] = [];
+  for (let i = 0; i < merged.length; i++) {
+    const r = merged[i] || {};
+    // url/link/href normalization
+    const url = (r.url || r.link || r.href || "").toString();
+    // publishedAt/pubDate/date/created_at normalization
+    const published =
+      r.publishedAt || r.pubDate || r.date || r.datetime || r.time || r.timestamp || r.created_at || r.createdAt;
+    const publishedAt = isIso(published) ? new Date(published).toISOString() : undefined;
+    const title = (r.title || r.headline || r.name || "").toString();
+    const source = (r.source || r.site || r.publisher || r.outlet || "").toString();
+    out.push({ title, url, publishedAt, source });
+  }
+  return out;
+}
+
+/** -------- Weather helpers -------- */
 function degToDir(d?: number) {
   if (typeof d !== "number" || isNaN(d)) return undefined;
   const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW","N"];
   return dirs[Math.round(d/22.5)];
 }
-
 async function fetchWeatherLocalFirst(lat: number, lon: number): Promise<WeatherNow | null> {
-  // 1) Try your local API shapes
   const tryLocal = async (path: string) => {
     try {
       const r = await fetch(path, { cache: "no-store" });
       if (!r.ok) return null;
       const j = await r.json();
-      // Normalize several common shapes
       const c = j?.current || j?.now || j;
-      if (c?.temp != null || c?.temperature != null || j?.temp != null) {
-        return {
-          temp: Math.round(c?.temp ?? c?.temperature ?? j?.temp),
-          feelsLike: c?.feelsLike ?? c?.apparent ?? j?.feelsLike,
-          wind: { speed: c?.wind?.speed ?? c?.windSpeed ?? j?.windSpeed, dir: c?.wind?.dir ?? c?.windDirection ?? j?.windDirection },
-          humidity: c?.humidity ?? j?.humidity,
-          desc: c?.desc ?? c?.condition ?? j?.desc ?? "Weather",
-          icon: c?.icon ?? j?.icon,
-          unit: c?.unit ?? j?.unit ?? "F",
-        };
-      }
-      return null;
+      const temp = c?.temp ?? c?.temperature ?? j?.temp;
+      if (temp == null) return null;
+      return {
+        temp: Math.round(temp),
+        feelsLike: c?.feelsLike ?? c?.apparent ?? j?.feelsLike,
+        wind: { speed: c?.wind?.speed ?? c?.windSpeed ?? j?.windSpeed, dir: c?.wind?.dir ?? c?.windDirection ?? j?.windDirection },
+        humidity: c?.humidity ?? j?.humidity,
+        desc: c?.desc ?? c?.condition ?? j?.desc ?? "Weather",
+        icon: c?.icon ?? j?.icon,
+        unit: c?.unit ?? j?.unit ?? "F",
+      };
     } catch { return null; }
   };
   const local =
     (await tryLocal("/api/weather/now")) ||
     (await tryLocal("/api/weather/current")) ||
     (await tryLocal("/api/weather"));
-
   if (local?.temp != null) return local;
 
-  // 2) Fallback: Open-Meteo (public, CORS ok)
+  // Fallback: Open-Meteo
   try {
     const url = new URL("https://api.open-meteo.com/v1/forecast");
     url.search = new URLSearchParams({
@@ -96,7 +113,6 @@ async function fetchWeatherLocalFirst(lat: number, lon: number): Promise<Weather
     };
   } catch { return null; }
 }
-
 function codeToDesc(code?: number) {
   const c = code ?? -1;
   if ([0].includes(c)) return "Clear";
@@ -110,32 +126,28 @@ function codeToDesc(code?: number) {
   return "Weather";
 }
 
-/* -------------------- Component -------------------- */
+/** -------- Component -------- */
 export default function WeatherTicker() {
-  // City/Host
   const [host, setHost] = useState("");
   useEffect(() => { if (typeof window !== "undefined") setHost(window.location.hostname || ""); }, []);
   const city = getCityFromHost(host);
 
-  // State
   const [articles, setArticles] = useState<Article[]>([]);
   const [weather, setWeather] = useState<WeatherNow | null>(null);
   const [nowText, setNowText] = useState<string>("");
 
-  // Ticker anim vars
-  const trackRef = useRef<HTMLDivElement | null>(null);
-  const dupRef   = useRef<HTMLDivElement | null>(null);
   const rootRef  = useRef<HTMLDivElement | null>(null);
+  const pass1Ref = useRef<HTMLDivElement | null>(null);
 
-  // Clock (subtle, TV-like)
+  // Clock
   useEffect(() => {
-    const fmt = () => setNowText(new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }));
-    fmt();
-    const t = window.setInterval(fmt, 30_000);
+    const update = () => setNowText(new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }));
+    update();
+    const t = window.setInterval(update, 30_000);
     return () => window.clearInterval(t);
   }, []);
 
-  // News polling (60s)
+  // News polling (60s) – parses headlines/articles/news/items
   useEffect(() => {
     let t: number | null = null;
     async function refreshNews() {
@@ -148,10 +160,7 @@ export default function WeatherTicker() {
         const r = await fetch(`/api/news?${qs.toString()}`, { cache: "no-store" });
         if (!r.ok) return;
         const j = await r.json();
-        const raw: Article[] =
-          Array.isArray(j.articles) ? j.articles :
-          Array.isArray(j.news)     ? j.news     :
-          Array.isArray((j as any).items) ? (j as any).items : [];
+        const raw = coerceArticles(j);
         const todays = raw.filter(a => isTodayLocal(a.publishedAt));
         const merged = dedupeKeepNewest([...articles, ...todays])
           .filter(a => isTodayLocal(a.publishedAt))
@@ -185,18 +194,18 @@ export default function WeatherTicker() {
       out.push({ kind: "news", data: articles[i] });
       if (++n % 2 === 0 && weather) out.push({ kind: "weather" });
     }
-    if (!articles.length && weather) out.push({ kind: "weather" });
+    if (!articles.length && weather) out.push({ kind: "weather" }); // fallback
     return out;
   }, [articles, weather]);
 
-  // Measure content → set CSS var for speed (smooth, non-overwhelming)
+  // Measure width → set animation duration (smooth pace)
   useEffect(() => {
-    const root = rootRef.current, track = trackRef.current;
-    if (!root || !track) return;
-    const contentWidth = track.scrollWidth;
-    const speedPxPerSec = 60;                // TV-ish pace
-    const duration = Math.max(20, Math.round(contentWidth / speedPxPerSec));
-    root.style.setProperty("--ticker-duration", `${duration}s`);
+    const root = rootRef.current, pass1 = pass1Ref.current;
+    if (!root || !pass1) return;
+    const w = pass1.scrollWidth || 1;
+    const pxPerSec = 60;
+    const dur = Math.max(20, Math.round(w / pxPerSec));
+    root.style.setProperty("--ticker-duration", `${dur}s`);
   }, [items, weather?.temp, weather?.feelsLike, weather?.wind?.speed]);
 
   return (
@@ -214,44 +223,40 @@ export default function WeatherTicker() {
 
       {/* Ticker line */}
       <div className="relative overflow-hidden">
-        <div className="ticker-track will-change-transform">
-          {/* pass 1 */}
-          <div ref={trackRef} className="flex items-center gap-3 pr-6">
+        <div className="ticker-lane">
+          {/* Pass 1 */}
+          <div ref={pass1Ref} className="ticker-pass">
             {items.length === 0 ? (
               <span className="text-xs text-gray-500 px-3 py-2">No fresh news yet today.</span>
-            ) : items.map((it, idx) => (
-              <TickerItem key={idx} kind={it.kind} data={it.data} weather={weather} />
-            ))}
+            ) : items.map((it, idx) => <TickerItem key={`p1-${idx}`} kind={it.kind} data={it.data} weather={weather} />)}
           </div>
-          {/* pass 2 (duplicate for seamless loop) */}
-          <div ref={dupRef} className="flex items-center gap-3 pr-6" aria-hidden>
+          {/* Pass 2 (duplicate) */}
+          <div className="ticker-pass" aria-hidden>
             {items.length === 0 ? (
               <span className="text-xs text-gray-500 px-3 py-2">No fresh news yet today.</span>
-            ) : items.map((it, idx) => (
-              <TickerItem key={`dup-${idx}`} kind={it.kind} data={it.data} weather={weather} />
-            ))}
+            ) : items.map((it, idx) => <TickerItem key={`p2-${idx}`} kind={it.kind} data={it.data} weather={weather} />)}
           </div>
         </div>
       </div>
 
-      {/* Scoped CSS for marquee */}
-      <style jsx global>{`
-        .ticker-track {
+      {/* Scoped marquee CSS */}
+      <style jsx>{`
+        .ticker-lane {
           display: flex;
           width: max-content;
           animation: ticker-scroll var(--ticker-duration, 30s) linear infinite;
         }
-        .ticker-track > div { display: flex; }
+        .ticker-pass { display: flex; align-items: center; gap: 12px; padding-right: 24px; }
         @keyframes ticker-scroll {
           from { transform: translateX(0); }
-          to   { transform: translateX(-50%); }
+          to   { transform: translateX(-50%); } /* two identical passes => -50% loop */
         }
       `}</style>
     </div>
   );
 }
 
-/* -------------------- Pieces -------------------- */
+/** -------- Pieces -------- */
 function TickerItem(props: { kind: "news" | "weather"; data?: Article; weather: WeatherNow | null }) {
   if (props.kind === "weather") {
     const w = props.weather;
@@ -283,11 +288,9 @@ function TickerItem(props: { kind: "news" | "weather"; data?: Article; weather: 
         className="group inline-flex items-center gap-2 rounded-md border border-gray-800 bg-black/30 px-3 py-1.5 hover:border-gray-700"
       >
         <span className="text-[11px] text-gray-400">{time}{a.source ? ` • ${a.source}` : ""}</span>
-        <span className="text-sm text-gray-100 max-w-[32rem] truncate group-hover:underline">
-          {a.title}
-        </span>
+        <span className="text-sm text-gray-100 max-w-[32rem] truncate group-hover:underline">{a.title}</span>
       </a>
-      <span className="text-gray-700">|</span>
+      <span className="text-gray-700" aria-hidden>|</span>
     </>
   );
 }
