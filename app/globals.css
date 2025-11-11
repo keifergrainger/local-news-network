@@ -46,15 +46,31 @@ body {
 .ticker > div {
   display: inline-block;
   padding-right: 2rem;
-  animation: scroll 65s linear infinite;
+  /* no fixed duration here — JS sets it dynamically */
+  animation-name: scroll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
 }
 
-/* slower = smoother; adjust speed if you want */
+/* smoother motion */
 @keyframes scroll {
   0% {
     transform: translateX(0);
   }
   100% {
     transform: translateX(-100%);
+  }
+}
+
+/* Optional polish */
+@media (hover:hover) {
+  .ticker:hover > div {
+    animation-play-state: paused; /* pause on hover (desktop) */
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker > div {
+    animation: none;
   }
 }
