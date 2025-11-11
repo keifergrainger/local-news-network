@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { CITIES } from "@/lib/cities";
 
-// Make sure we can read env vars
+/** Ensure env vars (like TICKETMASTER_KEY) are available */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/* ---------------- Types ---------------- */
 type RawEvent = {
   id: string;
   title: string;
@@ -17,10 +18,12 @@ type RawEvent = {
   free?: boolean;
 };
 
+/* ---------------- Helpers ---------------- */
 const DAY_MS = 24 * 60 * 60 * 1000;
 const toISO = (d: Date) => new Date(d).toISOString();
+// Ticketmaster hates milliseconds. Use YYYY-MM-DDTHH:MM:SSZ
+const toTmISO = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 
-/* --------- filters / helpers --------- */
 const SALES_NEGATIVE = [
   "sale","sales","percent off","% off","off%","discount","deal","deals",
   "bogo","clearance","coupon","promo","promotion","grand opening",
@@ -38,7 +41,7 @@ const dedupe = (events: RawEvent[]) => {
   });
 };
 
-/* --------- ICS parsing (robust) --------- */
+/* ---------- ICS parsing (robust to folded lines, CRLF, TZ variants) ---------- */
 function unfoldICS(text: string) {
   return text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "");
 }
@@ -85,22 +88,31 @@ async function fetchICS(url: string): Promise<RawEvent[]> {
       });
     }
     return out;
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
-/* --------- Ticketmaster helpers --------- */
+/* ---------- Ticketmaster helpers (two strategies) ---------- */
 async function tmFetch(url: string) {
   try {
     const r = await fetch(url, { cache: "no-store" });
     const status = r.status;
-    const data = await r.json().catch(() => ({}));
+    const text = await r.text();
+    let data: any = {};
+    try { data = JSON.parse(text); } catch { /* non-JSON error */ }
+
     const events = (data?._embedded?.events || []).map((ev: any) => {
-      const when = ev.dates?.start?.dateTime || ev.dates?.start?.localDate;
+      const whenRaw = ev.dates?.start?.dateTime || ev.dates?.start?.localDate; // localDate fallback
+      const whenISO = whenRaw
+        ? (whenRaw.includes("T") ? new Date(whenRaw).toISOString()
+                                 : new Date(`${whenRaw}T00:00:00`).toISOString())
+        : undefined;
       const venue = ev._embedded?.venues?.[0];
       return {
         id: `tm:${ev.id}`,
         title: ev.name,
-        start: when ? new Date(when).toISOString() : undefined,
+        start: whenISO!,
         venue: venue?.name,
         address: [venue?.address?.line1, venue?.city?.name].filter(Boolean).join(", "),
         source: "Ticketmaster",
@@ -108,9 +120,15 @@ async function tmFetch(url: string) {
         free: false,
       } as RawEvent;
     }).filter((e: RawEvent) => !!e.start);
-    return { status, total: data?.page?.totalElements ?? events.length, events, raw: data };
+
+    return {
+      status,
+      total: data?.page?.totalElements ?? events.length,
+      events,
+      rawText: status !== 200 ? text : undefined
+    };
   } catch (e) {
-    return { status: 0, total: 0, events: [], raw: { error: String(e) } };
+    return { status: 0, total: 0, events: [], rawText: String(e) };
   }
 }
 
@@ -128,35 +146,42 @@ async function fetchTicketmasterBothWays(
   radiusMiles = 25
 ) {
   const key = process.env.TICKETMASTER_KEY;
-  if (!key) return { chosen: "none", status: 0, total: 0, events: [], urls: {} as any };
+  if (!key) return { chosen: "none", status: 0, total: 0, events: [], urls: {}, rawText: "no key" };
 
-  const paramsCommon = {
+  // City mode — NO radius, NO locale, NO milliseconds
+  const qsCity = new URLSearchParams({
     apikey: key,
+    city: cityName,
+    sort: "date,asc",
+    startDateTime: toTmISO(from),
+    endDateTime: toTmISO(to),
+    size: "200",
+  });
+  const urlCity = `https://app.ticketmaster.com/discovery/v2/events.json?${qsCity.toString()}`;
+
+  // Lat/long mode — WITH radius, NO locale, NO milliseconds
+  const qsLat = new URLSearchParams({
+    apikey: key,
+    latlong: `${lat},${lon}`,
     radius: String(radiusMiles),
     unit: "miles",
     sort: "date,asc",
-    startDateTime: toISO(from),
-    endDateTime: toISO(to),
+    startDateTime: toTmISO(from),
+    endDateTime: toTmISO(to),
     size: "200",
-    locale: "*"
-  };
-
-  const qsLat = new URLSearchParams({ ...paramsCommon, latlong: `${lat},${lon}` });
+  });
   const urlLat = `https://app.ticketmaster.com/discovery/v2/events.json?${qsLat.toString()}`;
 
-  const qsCity = new URLSearchParams({ ...paramsCommon, city: cityName });
-  const urlCity = `https://app.ticketmaster.com/discovery/v2/events.json?${qsCity.toString()}`;
-
-  // Try lat/long first
+  // Try lat/long first, fallback to city name
   const a = await tmFetch(urlLat);
-  if (a.total > 0) return { chosen: "latlong", status: a.status, total: a.total, events: a.events, urls: { urlLat, urlCity } };
-
-  // Fallback: city name
+  if (a.total > 0 && a.status === 200) {
+    return { chosen: "latlong", status: a.status, total: a.total, events: a.events, urls: { urlLat, urlCity }, rawText: a.rawText };
+  }
   const b = await tmFetch(urlCity);
-  return { chosen: "city", status: b.status, total: b.total, events: b.events, urls: { urlLat, urlCity } };
+  return { chosen: "city", status: b.status, total: b.total, events: b.events, urls: { urlLat, urlCity }, rawText: b.rawText };
 }
 
-/* --------- API --------- */
+/* ---------------- API Handler ---------------- */
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -164,32 +189,28 @@ export async function GET(req: Request) {
     const rawHost  = (url.searchParams.get("host") || "").toLowerCase();
     const debug    = url.searchParams.get("debug") === "1";
 
-    // Date range (clamp to 180d max for Ticketmaster)
+    // Date range (clamped to 180 days for TM)
     const fromParam = url.searchParams.get("from");
     const toParam   = url.searchParams.get("to");
     const rangeFrom = fromParam ? new Date(fromParam) : new Date(Date.now() - 7 * DAY_MS);
     const unclampedTo = toParam ? new Date(toParam) : new Date(Date.now() + 120 * DAY_MS);
-    const rangeTo = clampRange(rangeFrom, unclampedTo, 180);
+    const rangeTo   = clampRange(rangeFrom, unclampedTo, 180);
 
     const city =
       CITIES.find(c => cityHost && cityHost.includes(c.host)) ||
       CITIES.find(c => rawHost && rawHost.includes(c.host)) ||
       CITIES[0];
 
-    // ICS feeds (if any)
-    const icsArrays = await Promise.all((city.icsFeeds || []).map(u => fetchICS(u)));
+    // Fetch ICS + Ticketmaster
+    const [icsArrays, tm] = await Promise.all([
+      Promise.all((city.icsFeeds || []).map(u => fetchICS(u))),
+      fetchTicketmasterBothWays(city.city, city.lat, city.lon, rangeFrom, rangeTo, city.eventRadiusMiles ?? 25),
+    ]);
     const ics = icsArrays.flat();
 
-    // Ticketmaster (two strategies)
-    const tm = await fetchTicketmasterBothWays(city.city, city.lat, city.lon, rangeFrom, rangeTo, city.eventRadiusMiles ?? 25);
-
-    // Merge
+    // Merge (NO extra date re-filter — trust TM range), still remove retail
     const merged = [...ics, ...tm.events]
       .filter(e => !!e.start)
-      .filter(e => {
-        const t = new Date(e.start).getTime();
-        return t >= rangeFrom.getTime() && t <= rangeTo.getTime();
-      })
       .filter(e => !isRetailish(e.title || ""));
 
     const events = dedupe(merged)
@@ -198,8 +219,8 @@ export async function GET(req: Request) {
 
     const payload: any = {
       city: { host: city.host, name: `${city.city}, ${city.state}` },
-      from: rangeFrom.toISOString(),
-      to: rangeTo.toISOString(),
+      from: toISO(rangeFrom),
+      to: toISO(rangeTo),
       count: events.length,
       events
     };
@@ -210,10 +231,11 @@ export async function GET(req: Request) {
       payload.tmStatus = tm.status;
       payload.tmTotal = tm.total;
       payload.tmUrls = tm.urls;
+      if (tm.status !== 200) payload.tmError = tm.rawText;
     }
 
     return NextResponse.json(payload);
-  } catch {
+  } catch (e) {
     return NextResponse.json({ events: [] }, { status: 200 });
   }
 }
