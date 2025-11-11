@@ -33,10 +33,9 @@ function formatYMD(d: Date) {
 function sameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
-/** convert ISO to local YYYY-MM-DD (matches server’s dayKeyLocal) */
+/** convert ISO to local YYYY-MM-DD (matches user’s timezone) */
 function isoToLocalYMD(iso: string) {
-  const d = new Date(iso);
-  return formatYMD(d);
+  return formatYMD(new Date(iso));
 }
 
 const WINDOW_MONTHS_AHEAD = 2;
@@ -61,7 +60,6 @@ export default function Calendar() {
       const from = startOfMonth(anchorMonth);
       const to = endOfMonth(addMonths(anchorMonth, WINDOW_MONTHS_AHEAD));
       const url = `/api/events?host=${encodeURIComponent(city.host)}&from=${formatYMD(from)}&to=${formatYMD(to)}`;
-      // use no-store so we don’t get stale results that disagree with day fetch
       const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       setDaysSummary(Array.isArray(data.days) ? data.days : []);
@@ -99,11 +97,11 @@ export default function Calendar() {
 
   /**
    * Load the exact per-day list.
-   * - Primary: /api/events/[date] (already deduped & local-day filtered by server)
-   * - Fallback: /api/events?full=1 and filter by LOCAL day on client
+   * - Primary: /api/events/[date] (server returns a UTC-day window)
+   * - We **always** post-filter to the user’s local day so counts & drawer are correct.
+   * - Fallback: /api/events?full=1 and local-day filter (same filter).
    */
   async function ensureDayLoaded(dateStr: string) {
-    // if we already have an array (even empty), don’t refetch
     if (Array.isArray(dayEvents[dateStr])) return;
 
     setDayEvents(prev => ({ ...prev, [dateStr]: 'loading' }));
@@ -111,7 +109,8 @@ export default function Calendar() {
       const res = await fetch(`/api/events/${dateStr}?host=${encodeURIComponent(city.host)}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(String(res.status));
       const json = await res.json();
-      const list: ApiEvent[] = Array.isArray(json.events) ? json.events : [];
+      const raw: ApiEvent[] = Array.isArray(json.events) ? json.events : [];
+      const list = raw.filter(e => isoToLocalYMD(e.start) === dateStr); // <<< local-day filter FIX
       setDayEvents(prev => ({ ...prev, [dateStr]: list }));
       setDayTotals(prev => ({ ...prev, [dateStr]: list.length }));
     } catch {
@@ -122,8 +121,7 @@ export default function Calendar() {
         );
         const json2 = await res2.json();
         const all: ApiEvent[] = Array.isArray(json2.events) ? json2.events : [];
-        // IMPORTANT: filter by LOCAL day (not UTC slice)
-        const list = all.filter(e => isoToLocalYMD(e.start) === dateStr);
+        const list = all.filter(e => isoToLocalYMD(e.start) === dateStr); // <<< local-day filter FIX
         setDayEvents(prev => ({ ...prev, [dateStr]: list }));
         setDayTotals(prev => ({ ...prev, [dateStr]: list.length }));
       } catch {
@@ -225,7 +223,7 @@ export default function Calendar() {
         {loading ? "Loading events…" : `${daysSummary.length} days loaded in 3-month window`}
       </div>
 
-      {/* Drawer (always shows the exact per-day list when available) */}
+      {/* Drawer (shows the exact per-day list after local-day filter) */}
       {selectedDate && (
         <div className="mt-4 p-3 rounded-xl bg-gray-900/70 border border-gray-800">
           <div className="flex items-center justify-between">
@@ -241,7 +239,6 @@ export default function Calendar() {
             if (state === 'loading') return <div className="mt-2 text-xs text-gray-500">Loading…</div>;
             if (state === 'error')   return <div className="mt-2 text-xs text-red-400">Couldn’t load events for this day.</div>;
 
-            // Prefer full exact list; if not fetched (shouldn’t happen after click), show summary tops as a fallback
             const s = summaryByDate.get(key);
             const list: ApiEvent[] = Array.isArray(state) ? state : (s?.tops ?? []);
             const sorted = [...list].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
@@ -269,3 +266,4 @@ export default function Calendar() {
     </div>
   );
 }
+
