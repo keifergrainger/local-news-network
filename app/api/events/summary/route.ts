@@ -1,5 +1,5 @@
 // ==========================================================
-// File: app/api/events/summary/route.ts
+// REPLACE the whole file: app/api/events/summary/route.ts
 // ==========================================================
 import { NextRequest, NextResponse } from "next/server";
 import { getCityFromHost } from "@/lib/cities";
@@ -20,19 +20,18 @@ type ApiEvent = {
 };
 
 type DaySummary = {
-  date: string;                  // YYYY-MM-DD (local)
-  tops: ApiEvent[];              // up to 2
-  moreCount: number;             // remaining after tops
+  date: string;      // YYYY-MM-DD
+  tops: ApiEvent[];  // up to 2
+  moreCount: number;
 };
 
-/* -------- utils (keep tiny; correctness > clever) -------- */
 function pad2(n: number) { return String(n).padStart(2, "0"); }
 function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
-function toISO(d: Date) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString(); } // why: make inclusive ranges predictable
+function toISO(d: Date) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString(); } // why: stable range on server
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999); }
 function norm(s?: string) {
-  return (s || "").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim(); // why: stable dedupe across sources
+  return (s || "").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim(); // why: robust dedupe across sources
 }
 
 export async function GET(req: NextRequest) {
@@ -41,29 +40,27 @@ export async function GET(req: NextRequest) {
     const hostHeader = req.headers.get("host") || "";
     const city = getCityFromHost(hostHeader);
 
-    // Parse date range; default to current month
     const now = new Date();
     const fromParam = url.searchParams.get("from");
     const toParam = url.searchParams.get("to");
     const from = fromParam ? new Date(fromParam) : startOfMonth(now);
     const to = toParam ? new Date(toParam) : endOfMonth(now);
 
-    // Fetch raw events from the existing endpoint to reuse all your fetchers
-    const origin = req.nextUrl.origin; // robust behind proxies
+    const origin = req.nextUrl.origin;
     const eventsResp = await fetch(
       `${origin}/api/events?from=${encodeURIComponent(toISO(from))}&to=${encodeURIComponent(toISO(to))}`,
       { headers: { "x-internal": "events-summary" }, cache: "no-store" }
     );
 
     if (!eventsResp.ok) {
-      // Never 500 a day view; return empty days so UI can render gracefully
+      // fail-soft: empty days so UI still renders
       return NextResponse.json({ city, from: toISO(from), to: toISO(to), days: [] }, { status: 200 });
     }
 
     const eventsJson: { events?: ApiEvent[] } = await eventsResp.json();
     const raw = Array.isArray(eventsJson.events) ? eventsJson.events : [];
 
-    // ---- De-spam / dedupe (title + local day + venue/address)
+    // De-spam / dedupe by (title + local day + venue/address)
     const seen = new Map<string, ApiEvent>();
     for (const e of raw) {
       if (!e?.title || !e?.start) continue;
@@ -73,7 +70,7 @@ export async function GET(req: NextRequest) {
     }
     const deduped = [...seen.values()];
 
-    // ---- Group by day (local)
+    // Group by day
     const byDay = new Map<string, ApiEvent[]>();
     for (const e of deduped) {
       const ymd = localYmd(new Date(e.start));
@@ -82,16 +79,12 @@ export async function GET(req: NextRequest) {
       byDay.set(ymd, arr);
     }
 
-    // ---- Build summaries for all days in range (inclusive)
+    // Build day summaries
     const days: DaySummary[] = [];
     const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
     while (cursor <= to) {
       const ymd = localYmd(cursor);
-      const list = (byDay.get(ymd) || []).slice().sort((a, b) => {
-        const at = new Date(a.start).getTime();
-        const bt = new Date(b.start).getTime();
-        return at - bt;
-      });
+      const list = (byDay.get(ymd) || []).slice().sort((a, b) => +new Date(a.start) - +new Date(b.start));
       const tops = list.slice(0, 2);
       const moreCount = Math.max(0, list.length - tops.length);
       days.push({ date: ymd, tops, moreCount });
@@ -108,14 +101,13 @@ export async function GET(req: NextRequest) {
       { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" } }
     );
   } catch {
-    // Fail-soft: empty model so UI can still render calendar shell
     return NextResponse.json({ days: [] }, { status: 200 });
   }
 }
 
 
 // ==========================================================
-// File: components/Calendar.tsx
+// ADD this file (or REPLACE if it exists): components/Calendar.tsx
 // ==========================================================
 "use client";
 
@@ -135,12 +127,11 @@ type ApiEvent = {
 };
 
 type DaySummary = {
-  date: string;         // YYYY-MM-DD
-  tops: ApiEvent[];     // up to 2
-  moreCount: number;    // remaining after tops
+  date: string;       // YYYY-MM-DD
+  tops: ApiEvent[];   // up to 2
+  moreCount: number;  // remaining after tops
 };
 
-/* ---------- utils ---------- */
 function pad2(n: number) { return String(n).padStart(2, "0"); }
 function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
@@ -149,7 +140,6 @@ function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getM
 function isSameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function weekdayShort(i: number) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][i]; }
 
-/* ---------- component ---------- */
 export default function Calendar() {
   const [host, setHost] = useState<string>("");
   const [activeMonth, setActiveMonth] = useState<Date>(() => startOfMonth(new Date()));
@@ -185,10 +175,9 @@ export default function Calendar() {
   }, [activeMonth]);
 
   const gridDates = useMemo(() => {
-    // 6x7 grid anchored to the active month (Sun start)
     const first = startOfMonth(activeMonth);
     const start = new Date(first);
-    start.setDate(first.getDate() - first.getDay()); // back to Sunday
+    start.setDate(first.getDate() - first.getDay()); // grid starts on Sunday
     const arr: Date[] = [];
     for (let i = 0; i < 42; i++) {
       const d = new Date(start);
@@ -198,14 +187,17 @@ export default function Calendar() {
     return arr;
   }, [activeMonth]);
 
-  const monthLabel = useMemo(() => {
-    return activeMonth.toLocaleString(undefined, { month: "long", year: "numeric" });
-  }, [activeMonth]);
+  const monthLabel = useMemo(
+    () => activeMonth.toLocaleString(undefined, { month: "long", year: "numeric" }),
+    [activeMonth]
+  );
 
   return (
     <div className="rounded-2xl border border-gray-800 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 bg-gray-900/60 border-b border-gray-800">
-        <div className="text-lg font-semibold">{city.city}, {city.state} — {monthLabel}</div>
+        <div className="text-lg font-semibold">
+          {city.city}, {city.state} — {monthLabel}
+        </div>
         <div className="flex gap-2">
           <button
             className="btn btn-sm"
@@ -289,3 +281,16 @@ export default function Calendar() {
     </div>
   );
 }
+
+
+// ==========================================================
+// OPTIONAL: ensure it's rendered, e.g. app/page.tsx
+// ==========================================================
+// import Calendar from "@/components/Calendar";
+// export default function Page() {
+//   return (
+//     <main className="p-6">
+//       <Calendar />
+//     </main>
+//   );
+// }
