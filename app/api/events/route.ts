@@ -20,8 +20,7 @@ type RawEvent = {
 /* ---------------- Helpers ---------------- */
 const DAY_MS = 24 * 60 * 60 * 1000;
 const toISO = (d: Date) => new Date(d).toISOString();
-// Ticketmaster needs no milliseconds in ISO
-const toTmISO = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+const toTmISO = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z"); // TM dislikes millis
 
 const SALES_NEGATIVE = [
   "sale","sales","percent off","% off","off%","discount","deal","deals",
@@ -35,13 +34,27 @@ function normalizeTitle(t = "") {
   return t
     .toLowerCase()
     .replace(/\s+vs\.\s+/g, " vs ")
+    .replace(/\s+vs\s+/g, " vs ")
+    .replace(/\s+at\s+/g, " at ")
     .replace(/[’'"]/g, "")
     .replace(/[.,!?:;()[\]{}]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-/** YYYY-MM-DD in local time (based on the event date string) */
+/** Try to canonicalize sports matchups so "Utah Jazz vs Mavericks" === "Mavericks at Utah Jazz" */
+function sportsKey(title = ""): string | null {
+  const t = normalizeTitle(title);
+  // capture "a vs b" or "a at b"
+  const m = t.match(/(.+?)\s+(?:vs|at)\s+(.+)/i);
+  if (!m) return null;
+  const a = m[1].trim();
+  const b = m[2].trim();
+  const parts = [a, b].sort((x, y) => x.localeCompare(y));
+  return `sports:${parts[0]}__${parts[1]}`;
+}
+
+/** YYYY-MM-DD in local time from ISO */
 function dayKeyLocal(iso: string) {
   const d = new Date(iso);
   const y = d.getFullYear();
@@ -51,17 +64,22 @@ function dayKeyLocal(iso: string) {
 }
 
 /**
- * Same-day dedupe: for each (day, normalized title) keep the earliest start.
+ * Same-day dedupe:
+ * - If sportsKey exists, use that so "A vs B" == "B at A"
+ * - Else use normalized title (+ address if present) to collapse near-duplicates
+ * Keep earliest start.
  */
 function dedupeSameDay(events: RawEvent[]) {
-  const keep = new Map<string, RawEvent>(); // key = `${day}|${normTitle}`
+  const keep = new Map<string, RawEvent>(); // key = `${day}|<canon>`
   for (const ev of events) {
     if (!ev.start || !ev.title) continue;
-    const key = `${dayKeyLocal(ev.start)}|${normalizeTitle(ev.title)}`;
+    const day = dayKeyLocal(ev.start);
+    const skey = sportsKey(ev.title);
+    const canon = skey || `${normalizeTitle(ev.title)}|${(ev.address || "").toLowerCase().trim()}`;
+    const key = `${day}|${canon}`;
     const existing = keep.get(key);
-    if (!existing) {
-      keep.set(key, ev);
-    } else {
+    if (!existing) keep.set(key, ev);
+    else {
       const a = new Date(existing.start).getTime();
       const b = new Date(ev.start).getTime();
       if (b < a) keep.set(key, ev);
@@ -128,7 +146,7 @@ async function fetchICS(url: string): Promise<RawEvent[]> {
   }
 }
 
-/* ---------- Ticketmaster pagination ---------- */
+/* ---------- Ticketmaster ---------- */
 function mapTmEvents(data: any): RawEvent[] {
   const arr = data?._embedded?.events || [];
   return arr.map((ev: any) => {
@@ -155,7 +173,7 @@ async function fetchPaginated(baseParams: Record<string,string>, maxPages = 5) {
   const key = process.env.TICKETMASTER_KEY;
   if (!key) return { status: 0, total: 0, events: [] as RawEvent[], pages: 0 };
 
-  const size = 200; // TM max per page
+  const size = 200;
   let page = 0;
   let totalPages = 1;
   let totalElements = 0;
@@ -199,7 +217,6 @@ async function fetchTicketmasterAll(
   to: Date,
   radiusMiles = 25
 ) {
-  // Try lat/long WITH radius first
   const latParams: Record<string,string> = {
     latlong: `${lat},${lon}`,
     radius: String(radiusMiles),
@@ -212,7 +229,6 @@ async function fetchTicketmasterAll(
     return { chosen: "latlong", ...latRes };
   }
 
-  // Fallback: city name only
   const cityParams: Record<string,string> = {
     city: cityName,
     startDateTime: toTmISO(from),
@@ -222,6 +238,50 @@ async function fetchTicketmasterAll(
   return { chosen: "city", ...cityRes };
 }
 
+/* ---------- Eventbrite (optional) ---------- */
+async function fetchEventbrite(city: string, from: Date, to: Date, terms: string[] = []): Promise<RawEvent[]> {
+  const token = process.env.EVENTBRITE_TOKEN;
+  if (!token) return [];
+  const queries = terms.length ? terms.slice(0, 5) : [city];
+  const out: RawEvent[] = [];
+
+  for (const q of queries) {
+    const url = new URL("https://www.eventbriteapi.com/v3/events/search/");
+    url.searchParams.set("q", q);
+    url.searchParams.set("sort_by", "date");
+    url.searchParams.set("expand", "venue");
+    url.searchParams.set("start_date.range_start", from.toISOString());
+    url.searchParams.set("start_date.range_end", to.toISOString());
+    url.searchParams.set("include_all_series_instances", "true");
+
+    try {
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const ev of (data?.events || [])) {
+        const dt = ev?.start?.utc;
+        if (!dt) continue;
+        const loc =
+          [ev?.venue?.name, ev?.venue?.address?.localized_address_display].filter(Boolean).join(", ") ||
+          ev?.venue?.address?.localized_area_display || undefined;
+        out.push({
+          id: `eb:${ev?.id}`,
+          title: ev?.name?.text || "Untitled",
+          start: new Date(dt).toISOString(),
+          venue: ev?.venue?.name || undefined,
+          address: loc,
+          url: ev?.url || undefined,
+          source: "Eventbrite"
+        });
+      }
+    } catch { /* ignore */ }
+  }
+  return out;
+}
+
 /* ---------------- API Handler ---------------- */
 export async function GET(req: Request) {
   try {
@@ -229,7 +289,7 @@ export async function GET(req: Request) {
     const cityHost = (url.searchParams.get("cityHost") || "").toLowerCase();
     const rawHost  = (url.searchParams.get("host") || "").toLowerCase();
     const debug    = url.searchParams.get("debug") === "1";
-    const full     = url.searchParams.get("full") === "1"; // keep full mode if needed
+    const full     = url.searchParams.get("full") === "1"; // legacy full
 
     // Date range (clamp to 12 months)
     const fromParam = url.searchParams.get("from");
@@ -243,29 +303,30 @@ export async function GET(req: Request) {
       CITIES.find(c => rawHost && rawHost.includes(c.host)) ||
       CITIES[0];
 
-    // Fetch ICS + Ticketmaster (paginated)
-    const [icsArrays, tm] = await Promise.all([
+    // Fetch ICS + Ticketmaster + Eventbrite (all optional-safe)
+    const [icsArrays, tm, eb] = await Promise.all([
       Promise.all((city.icsFeeds || []).map(u => fetchICS(u))),
       fetchTicketmasterAll(city.city, city.lat, city.lon, rangeFrom, rangeTo, city.eventRadiusMiles ?? 25),
+      fetchEventbrite(city.city, rangeFrom, rangeTo, city.eventbriteTerms || []),
     ]);
     const ics = icsArrays.flat();
 
-    // Merge (no extra date re-filter), remove retail promos, dedupe same-day
-    const merged = [...ics, ...tm.events]
-      .filter(e => !!e.start)
+    // Merge (no extra re-filter), remove retail promos, dedupe same-day
+    const merged = [...ics, ...tm.events, ...eb]
+      .filter(e => !!e.start && !!e.title)
       .filter(e => !isRetailish(e.title || ""));
 
     const unique = dedupeSameDay(merged);
 
     const events = unique
       .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
-      .slice(0, 2000); // safety cap
+      .slice(0, 3000); // generous cap
 
     // ---------- SUMMARY MODE (default) ----------
     if (!full) {
       // Priority classifiers
       const isSports = (t = "") =>
-        /\b(vs\.?|game|match|basketball|football|hockey|soccer|baseball|nba|nfl|nhl|mls|ncaa|utah jazz|delta center)\b/i.test(t);
+        /\b(vs\.?|game|match|basketball|football|hockey|soccer|baseball|nba|nfl|nhl|mls|ncaa|jazz|mavericks|utah jazz|delta center|arena)\b/i.test(t);
       const isConcert = (t = "") =>
         /\b(concert|live|tour|orchestra|symphony|band|dj|music|festival)\b/i.test(t);
 
@@ -312,6 +373,7 @@ export async function GET(req: Request) {
         payload.tmStatus = tm.status;
         payload.tmTotal = tm.total;
         payload.tmPages = tm.pages;
+        payload.ebEnabled = !!process.env.EVENTBRITE_TOKEN;
       }
       return NextResponse.json(payload, {
         headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" }
@@ -332,6 +394,7 @@ export async function GET(req: Request) {
       payload.tmStatus = tm.status;
       payload.tmTotal = tm.total;
       payload.tmPages = tm.pages;
+      payload.ebEnabled = !!process.env.EVENTBRITE_TOKEN;
     }
     return NextResponse.json(payload, {
       headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=300" }
@@ -341,3 +404,4 @@ export async function GET(req: Request) {
     return NextResponse.json({ days: [] }, { status: 200 });
   }
 }
+
