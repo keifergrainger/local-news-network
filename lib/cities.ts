@@ -6,7 +6,8 @@ export type CityConfig = {
   lon: number;
   heroImage: string;
   tagline: string;
-  breaking?: string[]; // add breaking news
+  breaking?: string[];      // optional manual items (still supported)
+  rssQueries?: string[];    // ← add: queries for automatic headlines
 };
 
 export const CITIES: CityConfig[] = [
@@ -19,32 +20,33 @@ export const CITIES: CityConfig[] = [
     heroImage:
       "https://images.unsplash.com/photo-1466285746891-30d1cd3a5400?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Salt Lake City",
-    breaking: [
-      "⚠️ Road Alert: I-15 overnight lane closures near 600 S",
-      "🏀 Jazz home game tonight — TRAX running late service",
-      "🏛️ City Council meets Tue 6:00 PM — public comment open",
-      "❄️ Winter parking rules start Dec 1 — no street parking 1–6 AM",
+    rssQueries: [
+      "Salt Lake City Utah news",
+      "Salt Lake County breaking news",
+      "SLC local news"
     ],
   },
   {
     host: "irmosc.com",
     city: "Irmo",
     state: "SC",
-    lat: 34.085,
-    lon: -81.183,
+    lat: 34.0857,
+    lon: -81.1832,
     heroImage:
       "https://images.unsplash.com/photo-1587613754436-514c2c0563a1?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Irmo",
+    rssQueries: ["Irmo SC news", "Lexington County news"],
   },
   {
     host: "caycesc.com",
     city: "Cayce",
     state: "SC",
-    lat: 33.965,
-    lon: -81.073,
+    lat: 33.9657,
+    lon: -81.0734,
     heroImage:
       "https://images.unsplash.com/photo-1604014237800-1c37de3f6e4d?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Cayce",
+    rssQueries: ["Cayce SC news", "West Columbia news"],
   },
   {
     host: "elizabethnc.com",
@@ -55,6 +57,7 @@ export const CITIES: CityConfig[] = [
     heroImage:
       "https://images.unsplash.com/photo-1503264116251-35a269479413?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Elizabeth City",
+    rssQueries: ["Elizabeth City NC news", "Pasquotank County news"],
   },
   {
     host: "fresnoca.org",
@@ -65,6 +68,7 @@ export const CITIES: CityConfig[] = [
     heroImage:
       "https://images.unsplash.com/photo-1566954981041-8e8d8ccaa9b6?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Fresno",
+    rssQueries: ["Fresno CA news", "Fresno County breaking"],
   },
   {
     host: "indioca.com",
@@ -75,6 +79,7 @@ export const CITIES: CityConfig[] = [
     heroImage:
       "https://images.unsplash.com/photo-1535905557558-afc4877a26fc?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Indio",
+    rssQueries: ["Indio CA news", "Coachella Valley news"],
   },
   {
     host: "kahuluihi.com",
@@ -85,6 +90,7 @@ export const CITIES: CityConfig[] = [
     heroImage:
       "https://images.unsplash.com/photo-1506744038136-46273834b3fb?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Kahului",
+    rssQueries: ["Kahului news", "Maui breaking news"],
   },
   {
     host: "perrisca.com",
@@ -95,13 +101,14 @@ export const CITIES: CityConfig[] = [
     heroImage:
       "https://images.unsplash.com/photo-1584466977773-2f13eaa1e68e?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Perris",
+    rssQueries: ["Perris CA news", "Riverside County breaking"],
   },
 ];
 
-export function getCityFromHost(hostname: string): CityConfig {
-  const found =
-    CITIES.find((c) => hostname.includes(c.host)) ||
-    CITIES.find((c) => hostname.includes("localhost")) ||
-    CITIES[0];
-  return found;
+export function getCityFromHost(hostname?: string): CityConfig {
+  const host = (hostname || "").toLowerCase();
+  return (
+    CITIES.find((c) => host.includes(c.host)) ||
+    CITIES[0]
+  );
 }
