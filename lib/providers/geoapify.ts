@@ -1,5 +1,5 @@
-﻿import { Business } from "@/types/business";
-import { ProviderClient, ProviderResult, SearchInput } from "./base";
+import { Business } from "@/types/business";
+import { getEnvNumber, ProviderClient, ProviderResult, SearchInput } from "./base";
 
 const API = "https://api.geoapify.com/v2/places";
 
@@ -43,6 +43,17 @@ export class GeoapifyProvider implements ProviderClient {
     const limit = 20;
     const offset = input.page ? Number(input.page) || 0 : 0;
 
+    const lat = Number.isFinite(input.lat) ? input.lat : NaN;
+    const lng = Number.isFinite(input.lng) ? input.lng : NaN;
+    const radiusMeters = Number.isFinite(input.radius)
+      ? input.radius
+      : getEnvNumber(process.env.CITY_RADIUS_M, 15000);
+    const clampedRadius = Math.max(100, Math.min(radiusMeters, 40000));
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(clampedRadius)) {
+      return { items: [], nextCursor: null, provider: "geoapify" };
+    }
+
     const cats = categoriesFor(input.category);
     const url = new URL(API);
 
@@ -58,11 +69,8 @@ export class GeoapifyProvider implements ProviderClient {
     }
 
     // circle filter (lon,lat,radiusMeters)
-    url.searchParams.set(
-      "filter",
-      `circle:${input.lng},${input.lat},${Math.max(100, Math.min(input.radius, 40000))}`
-    );
-    url.searchParams.set("bias", `proximity:${input.lng},${input.lat}`);
+    url.searchParams.set("filter", `circle:${lng},${lat},${clampedRadius}`);
+    url.searchParams.set("bias", `proximity:${lng},${lat}`);
     url.searchParams.set("limit", String(limit));
     url.searchParams.set("offset", String(offset));
     url.searchParams.set("lang", "en");

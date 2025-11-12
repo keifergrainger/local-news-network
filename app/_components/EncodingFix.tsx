@@ -1,14 +1,15 @@
-﻿'use client';
+"use client";
+
 import { useEffect } from "react";
 
 /* why: some content arrives mojibaked (UTF-8 bytes read as Latin-1).
    We fix the most common sequences globally, once after hydration. */
 const REPLACEMENTS: Array<[RegExp, string]> = [
-  [/â€”/g, "—"],  // em dash
-  [/â€“/g, "–"],  // en dash
-  [/â€¢/g, "•"],  // bullet
-  [/Â·/g, "·"],   // middle dot
-  [/Â/g, ""],     // stray "Â"
+  [/â€”/g, "—"], // em dash
+  [/â€“/g, "–"], // en dash
+  [/â€¢/g, "•"], // bullet
+  [/Â·/g, "·"], // middle dot
+  [/Â/g, ""], // stray "Â"
 ];
 
 export default function EncodingFix() {
@@ -28,4 +29,3 @@ export default function EncodingFix() {
 
   return null;
 }
-

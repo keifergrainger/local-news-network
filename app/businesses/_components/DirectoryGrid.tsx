@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import { Business } from "@/types/business";
 import BusinessCard from "./BusinessCard";
 import { useEffect, useRef, useState } from "react";
