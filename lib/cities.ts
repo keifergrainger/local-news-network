@@ -1,9 +1,10 @@
-﻿export type CityConfig = {
+export type CityConfig = {
   host: string;
   city: string;
   state: string;
   lat: number;
   lon: number;
+  timeZone?: string;
   heroImage: string;
   tagline: string;
   rssQueries?: string[];
@@ -21,6 +22,7 @@ export const CITIES: CityConfig[] = [
     state: "UT",
     lat: 40.7608,
     lon: -111.8910,
+    timeZone: "America/Denver",
     heroImage:
       "https://images.unsplash.com/photo-1466285746891-30d1cd3a5400?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Salt Lake City",
@@ -45,6 +47,7 @@ export const CITIES: CityConfig[] = [
     state: "CA",
     lat: 36.7378,
     lon: -119.7871,
+    timeZone: "America/Los_Angeles",
     heroImage:
       "https://images.unsplash.com/photo-1600210492486-724fe5c67fb2?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Fresno",
@@ -60,6 +63,7 @@ export const CITIES: CityConfig[] = [
     state: "CA",
     lat: 33.7206,
     lon: -116.2156,
+    timeZone: "America/Los_Angeles",
     heroImage:
       "https://images.unsplash.com/photo-1519681393784-d120267933ba?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Indio",
@@ -75,6 +79,7 @@ export const CITIES: CityConfig[] = [
     state: "CA",
     lat: 33.7825,
     lon: -117.2286,
+    timeZone: "America/Los_Angeles",
     heroImage:
       "https://images.unsplash.com/photo-1519681393784-d120267933ba?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Perris",
@@ -92,6 +97,7 @@ export const CITIES: CityConfig[] = [
     state: "SC",
     lat: 33.9654,
     lon: -81.0734,
+    timeZone: "America/New_York",
     heroImage:
       "https://images.unsplash.com/photo-1520975922299-84c42f4e1f8a?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Cayce",
@@ -107,6 +113,7 @@ export const CITIES: CityConfig[] = [
     state: "SC",
     lat: 34.0854,
     lon: -81.1832,
+    timeZone: "America/New_York",
     heroImage:
       "https://images.unsplash.com/photo-1587613754436-514c2c0563a1?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Irmo",
@@ -124,6 +131,7 @@ export const CITIES: CityConfig[] = [
     state: "NC",
     lat: 36.2946,
     lon: -76.2510,
+    timeZone: "America/New_York",
     heroImage:
       "https://images.unsplash.com/photo-1520975922299-84c42f4e1f8a?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Elizabeth City",
@@ -141,6 +149,7 @@ export const CITIES: CityConfig[] = [
     state: "HI",
     lat: 20.8890,
     lon: -156.4729,
+    timeZone: "Pacific/Honolulu",
     heroImage:
       "https://images.unsplash.com/photo-1535321834298-0c6df5874656?q=80&w=1600&auto=format&fit=crop",
     tagline: "Your Local Hub — News & Events in Kahului",

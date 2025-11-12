@@ -16,7 +16,7 @@ export default function EventCard({ e }: { e: LocalEvent }) {
   const end = e.end ? new Date(e.end) : undefined;
   const when =
     end && end.toDateString() !== date.toDateString()
-      ? `${date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} â€“ ${end.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+      ? `${date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} – ${end.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
       : `${date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`;
 
   return (
@@ -35,7 +35,7 @@ export default function EventCard({ e }: { e: LocalEvent }) {
         <div className="text-sm text-gray-300">{when}</div>
         {(e.venue || e.address) && (
           <div className="text-sm text-gray-400">
-            {e.venue}{e.venue && e.address ? ' â€” ' : ''}{e.address}
+            {e.venue}{e.venue && e.address ? ' — ' : ''}{e.address}
           </div>
         )}
       </div>

@@ -25,7 +25,9 @@ type DaySummary = {
 function pad2(n: number) { return n < 10 ? "0" + n : String(n); }
 function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
-function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
+function endOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+}
 function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getMonth() + m, Math.min(d.getDate(), 28)); }
 function isSameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function weekdayShort(i: number) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][i]; }
@@ -67,8 +69,10 @@ function dedupeEventsClient(events: ApiEvent[]): ApiEvent[] {
   return Array.from(seen.values());
 }
 
+const DEFAULT_HOST = "saltlakeut.com";
+
 export default function Calendar() {
-  const [host, setHost] = useState("");
+  const [host, setHost] = useState(DEFAULT_HOST);
   const [activeMonth, setActiveMonth] = useState<Date>(() => startOfMonth(new Date()));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,28 +86,36 @@ export default function Calendar() {
   const [dayError, setDayError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (typeof window !== "undefined") setHost(window.location.hostname || "");
+    if (typeof window === "undefined") return;
+    const current = window.location.hostname || "";
+    const resolved = getCityFromHost(current);
+    setHost(resolved?.host || DEFAULT_HOST);
   }, []);
-  const city = getCityFromHost(host);
+  const city = getCityFromHost(host || DEFAULT_HOST);
 
   // Fetch month summary (tops + moreCount)
   useEffect(() => {
+    if (!city?.host) return;
     const from = startOfMonth(activeMonth);
     const to = endOfMonth(activeMonth);
-    const qs = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() }).toString();
+    const qs = new URLSearchParams({
+      cityHost: city.host,
+      from: from.toISOString(),
+      to: to.toISOString(),
+    }).toString();
 
     setLoading(true);
     setError(null);
-    fetch(`/api/events-local-local/summary?${qs}`, { cache: "no-store" })
+    fetch(`/api/events-local/summary?${qs}`, { cache: "no-store" })
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then((json: { days?: DaySummary[] }) => {
         const map: Record<string, DaySummary> = {};
         for (const d of json.days || []) map[d.date] = d;
         setDays(map);
       })
-      .catch(() => setError("We couldnâ€™t load events for this month."))
+      .catch(() => setError("We couldn’t load events for this month."))
       .finally(() => setLoading(false));
-  }, [activeMonth]);
+  }, [activeMonth, city.host]);
 
   // 6x7 grid
   const gridDates = useMemo(() => {
@@ -129,9 +141,13 @@ export default function Calendar() {
     setModalOpen(true);
     setDayLoading(true);
     setDayError(null);
-    const fromISO = `${ymd}T00:00:00.000`;
-    const toISO = `${ymd}T23:59:59.999`;
-    const qs = new URLSearchParams({ from: fromISO, to: toISO }).toString();
+    const fromDate = new Date(`${ymd}T00:00:00`);
+    const toDate = new Date(`${ymd}T23:59:59.999`);
+    const qs = new URLSearchParams({
+      cityHost: city.host,
+      from: fromDate.toISOString(),
+      to: toDate.toISOString(),
+    }).toString();
 
     fetch(`/api/events-local?${qs}`, { cache: "no-store" })
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
@@ -142,7 +158,7 @@ export default function Calendar() {
           .sort((a, b) => +new Date(a.start) - +new Date(b.start));
         setDayEvents(deduped);
       })
-      .catch(() => setDayError("Couldnâ€™t load events for this day."))
+      .catch(() => setDayError("Couldn’t load events for this day."))
       .finally(() => setDayLoading(false));
   }
 
@@ -164,7 +180,7 @@ export default function Calendar() {
   return (
     <div className="rounded-2xl border border-gray-800 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 bg-gray-900/60 border-b border-gray-800">
-        <div className="text-lg font-semibold">{city.city}, {city.state} â€” {monthLabel}</div>
+        <div className="text-lg font-semibold">{city.city}, {city.state} — {monthLabel}</div>
         <div className="flex gap-2">
           <button
             className="btn btn-sm"
@@ -172,7 +188,7 @@ export default function Calendar() {
             aria-label="Previous month"
             title="Previous month"
           >
-            â€¹
+            ‹
           </button>
           <button
             className="btn btn-sm"
@@ -180,7 +196,7 @@ export default function Calendar() {
             aria-label="Next month"
             title="Next month"
           >
-            â€º
+            ›
           </button>
         </div>
       </div>
@@ -204,18 +220,20 @@ export default function Calendar() {
           const ymd = localYmd(d);
           const inMonth = d.getMonth() === activeMonth.getMonth();
           const today = isSameDay(d, new Date());
-          const summary = days[ymd];
+          const summary = inMonth ? days[ymd] : undefined;
+          const showLoading = loading && inMonth;
+          const hasEvents = !!summary && summary.tops.length > 0;
 
           return (
             <div
               key={ymd}
-              role="button"
-              tabIndex={0}
-              onClick={() => openDay(ymd)}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openDay(ymd); }}
-              className={`bg-gray-950 p-3 min-h-28 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 ${inMonth ? "" : "opacity-40"}`}
-              aria-label={`Open events for ${ymd}`}
-              title={`Open events for ${ymd}`}
+              role={inMonth ? "button" : undefined}
+              tabIndex={inMonth ? 0 : -1}
+              onClick={() => { if (inMonth) openDay(ymd); }}
+              onKeyDown={(e) => { if (inMonth && (e.key === "Enter" || e.key === " ")) openDay(ymd); }}
+              className={`bg-gray-950 p-3 min-h-28 ${inMonth ? "cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500" : "cursor-default opacity-40"}`}
+              aria-label={inMonth ? `Open events for ${ymd}` : undefined}
+              title={inMonth ? `Open events for ${ymd}` : undefined}
             >
               <div className="flex items-center justify-between mb-2">
                 <div className={`text-xs ${today ? "px-2 py-0.5 rounded bg-blue-500/10 text-blue-300" : "text-gray-400"}`}>
@@ -226,9 +244,9 @@ export default function Calendar() {
                 )}
               </div>
 
-              {loading ? (
-                <div className="text-xs text-gray-500">Loadingâ€¦</div>
-              ) : summary && summary.tops.length > 0 ? (
+              {showLoading ? (
+                <div className="text-xs text-gray-500">Loading…</div>
+              ) : hasEvents ? (
                 <div className="flex flex-col gap-1">
                   {summary.tops.slice(0, 2).map((ev) => (
                     <a
@@ -242,14 +260,18 @@ export default function Calendar() {
                       <div className="truncate font-medium text-gray-200">{ev.title}</div>
                       <div className="truncate text-[11px] text-gray-500">
                         {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                        {ev.venue ? ` â€¢ ${ev.venue}` : ""}
-                        {ev.source ? ` â€¢ ${ev.source}` : ""}
+                        {ev.venue ? ` • ${ev.venue}` : ""}
+                        {ev.source ? ` • ${ev.source}` : ""}
                       </div>
                     </a>
                   ))}
                 </div>
-              ) : (
+              ) : inMonth ? (
                 <div className="text-xs text-gray-500">No events for this day.</div>
+              ) : (
+                <div className="text-xs text-gray-500 opacity-0" aria-hidden="true">
+                  No events for this day.
+                </div>
               )}
             </div>
           );
@@ -269,11 +291,11 @@ export default function Calendar() {
                     })
                   : ""}
               </div>
-              <button className="btn btn-sm" onClick={closeModal} aria-label="Close">âœ•</button>
+              <button className="btn btn-sm" onClick={closeModal} aria-label="Close">✕</button>
             </div>
 
             <div className="p-4 overflow-auto">
-              {dayLoading && <div className="text-sm text-gray-500">Loading all eventsâ€¦</div>}
+              {dayLoading && <div className="text-sm text-gray-500">Loading all events…</div>}
               {dayError && <div className="text-sm text-red-400">{dayError}</div>}
               {!dayLoading && !dayError && dayEvents.length === 0 && (
                 <div className="text-sm text-gray-500">No events for this day.</div>
@@ -286,11 +308,11 @@ export default function Calendar() {
                         <div className="font-medium text-gray-100 truncate">{ev.title}</div>
                         <div className="text-xs text-gray-400 truncate">
                           {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                          {ev.end ? `â€“${new Date(ev.end).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
-                          {ev.venue ? ` â€¢ ${ev.venue}` : ""}
-                          {ev.address ? ` â€¢ ${ev.address}` : ""}
-                          {ev.source ? ` â€¢ ${ev.source}` : ""}
-                          {ev.free === true ? " â€¢ Free" : ""}
+                          {ev.end ? `–${new Date(ev.end).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
+                          {ev.venue ? ` • ${ev.venue}` : ""}
+                          {ev.address ? ` • ${ev.address}` : ""}
+                          {ev.source ? ` • ${ev.source}` : ""}
+                          {ev.free === true ? " • Free" : ""}
                         </div>
                       </a>
                     </li>
