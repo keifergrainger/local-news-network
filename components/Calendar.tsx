@@ -220,18 +220,20 @@ export default function Calendar() {
           const ymd = localYmd(d);
           const inMonth = d.getMonth() === activeMonth.getMonth();
           const today = isSameDay(d, new Date());
-          const summary = days[ymd];
+          const summary = inMonth ? days[ymd] : undefined;
+          const showLoading = loading && inMonth;
+          const hasEvents = !!summary && summary.tops.length > 0;
 
           return (
             <div
               key={ymd}
-              role="button"
-              tabIndex={0}
-              onClick={() => openDay(ymd)}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openDay(ymd); }}
-              className={`bg-gray-950 p-3 min-h-28 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 ${inMonth ? "" : "opacity-40"}`}
-              aria-label={`Open events for ${ymd}`}
-              title={`Open events for ${ymd}`}
+              role={inMonth ? "button" : undefined}
+              tabIndex={inMonth ? 0 : -1}
+              onClick={() => { if (inMonth) openDay(ymd); }}
+              onKeyDown={(e) => { if (inMonth && (e.key === "Enter" || e.key === " ")) openDay(ymd); }}
+              className={`bg-gray-950 p-3 min-h-28 ${inMonth ? "cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500" : "cursor-default opacity-40"}`}
+              aria-label={inMonth ? `Open events for ${ymd}` : undefined}
+              title={inMonth ? `Open events for ${ymd}` : undefined}
             >
               <div className="flex items-center justify-between mb-2">
                 <div className={`text-xs ${today ? "px-2 py-0.5 rounded bg-blue-500/10 text-blue-300" : "text-gray-400"}`}>
@@ -242,9 +244,9 @@ export default function Calendar() {
                 )}
               </div>
 
-              {loading ? (
+              {showLoading ? (
                 <div className="text-xs text-gray-500">Loading…</div>
-              ) : summary && summary.tops.length > 0 ? (
+              ) : hasEvents ? (
                 <div className="flex flex-col gap-1">
                   {summary.tops.slice(0, 2).map((ev) => (
                     <a
@@ -264,8 +266,12 @@ export default function Calendar() {
                     </a>
                   ))}
                 </div>
-              ) : (
+              ) : inMonth ? (
                 <div className="text-xs text-gray-500">No events for this day.</div>
+              ) : (
+                <div className="text-xs text-gray-500 opacity-0" aria-hidden="true">
+                  No events for this day.
+                </div>
               )}
             </div>
           );

@@ -29,6 +29,16 @@ export async function GET(req: Request) {
   try {
     const { city, center, range, events } = await loadFilteredEvents(url);
 
+    const anchor = range.from ?? range.to ?? null;
+    const monthStart = anchor
+      ? new Date(anchor.getFullYear(), anchor.getMonth(), 1)
+      : null;
+    const monthEnd = anchor
+      ? new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0, 23, 59, 59, 999)
+      : null;
+    const monthStartMs = monthStart ? monthStart.getTime() : null;
+    const monthEndMs = monthEnd ? monthEnd.getTime() : null;
+
     const byDay = new Map<string, NormalizedEvent[]>();
     for (const ev of events) {
       const day = localYmd(new Date(ev.start));
@@ -38,6 +48,13 @@ export async function GET(req: Request) {
     }
 
     const days = Array.from(byDay.entries())
+      .filter(([date]) => {
+        if (monthStartMs == null || monthEndMs == null) return true;
+        const [y, m, d] = date.split("-").map((part) => Number(part));
+        if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
+        const cellMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0);
+        return cellMs >= monthStartMs && cellMs <= monthEndMs;
+      })
       .map(([date, list]) => {
         const sorted = list.slice().sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
         const tops = sorted.slice(0, 2).map(thinEvent);

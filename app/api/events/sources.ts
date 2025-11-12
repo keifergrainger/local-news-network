@@ -17,7 +17,7 @@ export type RawEvent = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TM_PAGE_SIZE = 200;
-const TM_MAX_PAGES = 5;
+const TM_MAX_PAGES = 12;
 
 const dtfCache = new Map<string, Intl.DateTimeFormat>();
 function getTimeZoneOffset(date: Date, timeZone: string) {
@@ -202,9 +202,8 @@ export async function fetchTicketmasterEvents(
       const arr: any[] = data?._embedded?.events || [];
       if (!arr.length) break;
 
-      pages.push(
-        arr
-          .map((ev, idx) => {
+      const mapped = arr
+        .map((ev, idx) => {
             const rawStart = ev?.dates?.start?.dateTime || ev?.dates?.start?.localDate;
             if (!rawStart) return null;
             const startISO = rawStart.includes("T")
@@ -231,12 +230,22 @@ export async function fetchTicketmasterEvents(
             };
             return event;
           })
-          .filter((x): x is RawEvent => !!x)
-          .filter((ev) => {
-            const t = new Date(ev.start).getTime();
-            return t >= start.getTime() - DAY_MS && t <= end.getTime() + DAY_MS;
-          })
-      );
+        .filter((x): x is RawEvent => !!x);
+
+      const filtered = mapped.filter((ev) => {
+        const t = new Date(ev.start).getTime();
+        return t >= start.getTime() - DAY_MS && t <= end.getTime() + DAY_MS;
+      });
+
+      pages.push(filtered);
+
+      const firstEvent = mapped[0];
+      if (firstEvent) {
+        const firstTime = new Date(firstEvent.start).getTime();
+        if (Number.isFinite(firstTime) && firstTime > end.getTime() + DAY_MS) {
+          break;
+        }
+      }
 
       const totalPages = Number(data?.page?.totalPages ?? 0);
       if (!Number.isFinite(totalPages) || page >= totalPages - 1) {
