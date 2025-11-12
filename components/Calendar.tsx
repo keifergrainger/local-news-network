@@ -23,14 +23,121 @@ type DaySummary = {
 
 /** Format helpers */
 function pad2(n: number) { return n < 10 ? "0" + n : String(n); }
-function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
-function endOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-}
 function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getMonth() + m, Math.min(d.getDate(), 28)); }
-function isSameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function weekdayShort(i: number) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][i]; }
+
+const DAY_FMT_CACHE = new Map<string, Intl.DateTimeFormat>();
+const WEEKDAY_FMT_CACHE = new Map<string, Intl.DateTimeFormat>();
+const DATETIME_FMT_CACHE = new Map<string, Intl.DateTimeFormat>();
+const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+function ensureDayFormatter(timeZone: string) {
+  let fmt = DAY_FMT_CACHE.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+    DAY_FMT_CACHE.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
+function ensureWeekdayFormatter(timeZone: string) {
+  let fmt = WEEKDAY_FMT_CACHE.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" });
+    WEEKDAY_FMT_CACHE.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
+function ensureDateTimeFormatter(timeZone: string) {
+  let fmt = DATETIME_FMT_CACHE.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    DATETIME_FMT_CACHE.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
+function ymdInTimeZone(date: Date, timeZone: string) {
+  const fmt = ensureDayFormatter(timeZone);
+  const parts = fmt.formatToParts(date);
+  let year = "0000";
+  let month = "00";
+  let day = "00";
+  for (const part of parts) {
+    if (part.type === "year") year = part.value;
+    if (part.type === "month") month = part.value;
+    if (part.type === "day") day = part.value;
+  }
+  return `${year}-${month}-${day}`;
+}
+
+function weekdayInTimeZone(date: Date, timeZone: string) {
+  const fmt = ensureWeekdayFormatter(timeZone);
+  const label = fmt.format(date).slice(0, 3);
+  return WEEKDAY_INDEX[label] ?? 0;
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string) {
+  const fmt = ensureDateTimeFormatter(timeZone);
+  const parts = fmt.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type === "literal") continue;
+    map[part.type] = part.value;
+  }
+  const utcValue = Date.UTC(
+    Number(map.year ?? date.getUTCFullYear()),
+    Number(map.month ?? date.getUTCMonth() + 1) - 1,
+    Number(map.day ?? date.getUTCDate()),
+    Number(map.hour ?? 0),
+    Number(map.minute ?? 0),
+    Number(map.second ?? 0)
+  );
+  return utcValue - date.getTime();
+}
+
+function startOfDayUtc(ymd: string, timeZone: string) {
+  const [y, m, d] = ymd.split("-").map((part) => Number(part));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  const approx = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+  const offset = getTimeZoneOffsetMs(approx, timeZone);
+  return new Date(approx.getTime() - offset);
+}
+
+function endOfDayUtc(ymd: string, timeZone: string) {
+  const start = startOfDayUtc(ymd, timeZone);
+  if (!start) return null;
+  return new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+}
+
+function utcDayKey(date: Date) {
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+}
+
+function monthBoundariesUtc(date: Date, timeZone: string) {
+  const first = startOfMonth(date);
+  const firstYmd = ymdInTimeZone(first, timeZone);
+  const [yearStr, monthStr] = firstYmd.split("-");
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
+  const lastDay = new Date(year, month, 0).getDate();
+  const start = startOfDayUtc(`${yearStr}-${monthStr}-01`, timeZone);
+  const end = endOfDayUtc(`${yearStr}-${monthStr}-${pad2(lastDay)}`, timeZone);
+  if (!start || !end) return null;
+  return { start, end };
+}
 
 /** Normalization (ES5-safe) */
 function norm(s?: string) {
@@ -58,7 +165,7 @@ function dedupeEventsClient(events: ApiEvent[]): ApiEvent[] {
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
     if (!e || !e.title || !e.start) continue;
-    const ymd = localYmd(new Date(e.start));
+    const ymd = utcDayKey(new Date(e.start));
     const titleKey = norm(e.title);
     const loc = norm(e.venue || e.address);
     const keyBase = `${titleKey}|${ymd}`;
@@ -92,12 +199,16 @@ export default function Calendar() {
     setHost(resolved?.host || DEFAULT_HOST);
   }, []);
   const city = getCityFromHost(host || DEFAULT_HOST);
+  const timeZone = city.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
   // Fetch month summary (tops + moreCount)
   useEffect(() => {
     if (!city?.host) return;
-    const from = startOfMonth(activeMonth);
-    const to = endOfMonth(activeMonth);
+    const range = monthBoundariesUtc(activeMonth, timeZone);
+    const fallbackStart = startOfMonth(activeMonth);
+    const fallbackEnd = new Date(activeMonth.getFullYear(), activeMonth.getMonth() + 1, 0, 23, 59, 59, 999);
+    const from = range?.start ?? fallbackStart;
+    const to = range?.end ?? fallbackEnd;
     const qs = new URLSearchParams({
       cityHost: city.host,
       from: from.toISOString(),
@@ -115,13 +226,14 @@ export default function Calendar() {
       })
       .catch(() => setError("We couldn’t load events for this month."))
       .finally(() => setLoading(false));
-  }, [activeMonth, city.host]);
+  }, [activeMonth, city.host, timeZone]);
 
   // 6x7 grid
   const gridDates = useMemo(() => {
     const first = startOfMonth(activeMonth);
+    const offset = weekdayInTimeZone(first, timeZone);
     const start = new Date(first);
-    start.setDate(first.getDate() - first.getDay());
+    start.setDate(first.getDate() - offset);
     const arr: Date[] = [];
     for (let i = 0; i < 42; i++) {
       const d = new Date(start);
@@ -129,20 +241,36 @@ export default function Calendar() {
       arr.push(d);
     }
     return arr;
-  }, [activeMonth]);
+  }, [activeMonth, timeZone]);
 
   const monthLabel = useMemo(
-    () => activeMonth.toLocaleString(undefined, { month: "long", year: "numeric" }),
-    [activeMonth]
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        timeZone,
+        month: "long",
+        year: "numeric",
+      }).format(activeMonth),
+    [activeMonth, timeZone]
   );
+
+  const activeMonthKey = useMemo(
+    () => ymdInTimeZone(activeMonth, timeZone).slice(0, 7),
+    [activeMonth, timeZone]
+  );
+  const todayKey = useMemo(() => ymdInTimeZone(new Date(), timeZone), [timeZone]);
 
   function openDay(ymd: string) {
     setSelectedYmd(ymd);
     setModalOpen(true);
     setDayLoading(true);
     setDayError(null);
-    const fromDate = new Date(`${ymd}T00:00:00`);
-    const toDate = new Date(`${ymd}T23:59:59.999`);
+    const fromDate = startOfDayUtc(ymd, timeZone);
+    const toDate = endOfDayUtc(ymd, timeZone);
+    if (!fromDate || !toDate) {
+      setDayError("Couldn’t determine this day in the local time zone.");
+      setDayLoading(false);
+      return;
+    }
     const qs = new URLSearchParams({
       cityHost: city.host,
       from: fromDate.toISOString(),
@@ -217,9 +345,10 @@ export default function Calendar() {
 
       <div className="grid grid-cols-7 gap-px bg-gray-800">
         {gridDates.map((d) => {
-          const ymd = localYmd(d);
-          const inMonth = d.getMonth() === activeMonth.getMonth();
-          const today = isSameDay(d, new Date());
+          const ymd = ymdInTimeZone(d, timeZone);
+          const inMonth = ymd.slice(0, 7) === activeMonthKey;
+          const today = ymd === todayKey;
+          const dayNumber = Number(ymd.slice(8, 10));
           const summary = inMonth ? days[ymd] : undefined;
           const showLoading = loading && inMonth;
           const hasEvents = !!summary && summary.tops.length > 0;
@@ -237,7 +366,7 @@ export default function Calendar() {
             >
               <div className="flex items-center justify-between mb-2">
                 <div className={`text-xs ${today ? "px-2 py-0.5 rounded bg-blue-500/10 text-blue-300" : "text-gray-400"}`}>
-                  {d.getDate()}
+                  {Number.isFinite(dayNumber) ? dayNumber : d.getDate()}
                 </div>
                 {summary && summary.moreCount > 0 && (
                   <div className="text-[11px] text-gray-400">+{summary.moreCount} more</div>
@@ -259,7 +388,7 @@ export default function Calendar() {
                     >
                       <div className="truncate font-medium text-gray-200">{ev.title}</div>
                       <div className="truncate text-[11px] text-gray-500">
-                        {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+                        {new Date(ev.start).toLocaleTimeString(undefined, { timeZone, hour: "numeric", minute: "2-digit" })}
                         {ev.venue ? ` • ${ev.venue}` : ""}
                         {ev.source ? ` • ${ev.source}` : ""}
                       </div>
@@ -286,9 +415,16 @@ export default function Calendar() {
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
               <div className="text-sm text-gray-400">
                 {selectedYmd
-                  ? new Date(selectedYmd + "T00:00:00").toLocaleDateString(undefined, {
-                      weekday: "short", month: "short", day: "numeric", year: "numeric",
-                    })
+                  ? (startOfDayUtc(selectedYmd, timeZone) ?? new Date(selectedYmd + "T00:00:00")).toLocaleDateString(
+                      undefined,
+                      {
+                        timeZone,
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      }
+                    )
                   : ""}
               </div>
               <button className="btn btn-sm" onClick={closeModal} aria-label="Close">✕</button>
@@ -307,8 +443,14 @@ export default function Calendar() {
                       <a href={ev.url || "#"} target="_blank" rel="noreferrer" className="block">
                         <div className="font-medium text-gray-100 truncate">{ev.title}</div>
                         <div className="text-xs text-gray-400 truncate">
-                          {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                          {ev.end ? `–${new Date(ev.end).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
+                          {new Date(ev.start).toLocaleTimeString(undefined, { timeZone, hour: "numeric", minute: "2-digit" })}
+                          {ev.end
+                            ? `–${new Date(ev.end).toLocaleTimeString(undefined, {
+                                timeZone,
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}`
+                            : ""}
                           {ev.venue ? ` • ${ev.venue}` : ""}
                           {ev.address ? ` • ${ev.address}` : ""}
                           {ev.source ? ` • ${ev.source}` : ""}
