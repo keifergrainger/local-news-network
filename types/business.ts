@@ -1,14 +1,30 @@
-export type Business = {
+// types/business.ts
+
+export type BusinessSource = "google" | "yelp" | "geoapify";
+
+export interface Business {
   id: string;
   name: string;
-  rating?: number;
-  reviewCount?: number;
-  address?: string;
-  website?: string;
-  openNow?: boolean;
-  lat?: number;
-  lng?: number;
-  photoUrl?: string;
-  source: 'google' | 'yelp';
+
+  // Ratings / reviews - allow null because some providers may not send them
+  rating: number | null;
+  reviewCount: number | null;
+
+  // Display address
+  address: string;
+
+  // Optional extras
+  website?: string | null;
+  openNow?: boolean | null;
+  photoUrl?: string | null;
+
+  // Map position
+  lat: number;
+  lng: number;
+
+  // Which provider it came from
+  source: BusinessSource;
+
+  // Category labels (e.g. "restaurant", "plumber", etc.)
   categories: string[];
-};
+}
