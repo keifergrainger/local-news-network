@@ -1,115 +1,204 @@
 ﻿'use client';
-// components/Calendar.tsx
-import { useEffect, useMemo, useState } from "react";
-import { getCityFromHost } from "@/lib/cities";
+
+import { useEffect, useMemo, useState } from 'react';
+import { getCityFromHost } from '@/lib/cities';
 
 type ApiEvent = {
-  id: string;
-  title: string;
-  start: string;
-  end?: string;
-  venue?: string;
-  address?: string;
-  url?: string;
-  source?: string;
-  free?: boolean;
+  id?: string;
+  title?: string;
+  start?: string;
+  end?: string | null;
+  venue?: string | null;
+  address?: string | null;
+  url?: string | null;
+  source?: string | null;
+  free?: boolean | null;
 };
 
 type DaySummary = {
-  date: string;      // YYYY-MM-DD
-  tops: ApiEvent[];  // up to 2
-  moreCount: number;
+  date: string; // YYYY-MM-DD
+  tops: ApiEvent[]; // first 1–2 events to show in the cell
+  moreCount: number; // how many extra events beyond the tops
 };
 
-/** Format helpers */
-function pad2(n: number) { return n < 10 ? "0" + n : String(n); }
-function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
-function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
-function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
-function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getMonth() + m, Math.min(d.getDate(), 28)); }
-function isSameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
-function weekdayShort(i: number) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][i]; }
+/** Small helpers */
 
-/** Normalization (ES5-safe) */
-function norm(s?: string) {
-  if (!s) return "";
+function pad2(n: number) {
+  return n < 10 ? '0' + n : String(n);
+}
+
+function localYmd(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function startOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function endOfMonth(d: Date) {
+  // last day of month
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+}
+
+function addMonths(d: Date, m: number) {
+  return new Date(d.getFullYear(), d.getMonth() + m, 1);
+}
+
+function isSameDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function weekdayShort(i: number) {
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i];
+}
+
+/** Normalization / dedupe helpers (copied from your previous logic) */
+
+function norm(s?: string | null) {
+  if (!s) return '';
   return s
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
 
-/** Drop obvious placeholder/dummy events (why: ICS/test feeds pollute lists) */
 function isJunkEvent(e: ApiEvent) {
   const t = norm(e.title);
   if (!t) return true;
-  if (t === "example event title") return true;
+  if (t === 'example event title') return true;
   if (/^(example|sample|test)\s+event/.test(t)) return true;
   return false;
 }
 
-/** Dedupe across sources; fall back to title+day if location is weak */
 function dedupeEventsClient(events: ApiEvent[]): ApiEvent[] {
   const seen = new Map<string, ApiEvent>();
-  for (let i = 0; i < events.length; i++) {
-    const e = events[i];
+
+  for (const e of events) {
     if (!e || !e.title || !e.start) continue;
     const ymd = localYmd(new Date(e.start));
     const titleKey = norm(e.title);
     const loc = norm(e.venue || e.address);
     const keyBase = `${titleKey}|${ymd}`;
-    // why: many ICS duplicates have missing/noisy location; fallback collapses them
     const key = loc ? `${keyBase}|${loc}` : keyBase;
-    if (!seen.has(key)) seen.set(key, e);
+
+    if (!seen.has(key)) {
+      seen.set(key, e);
+    }
   }
+
   return Array.from(seen.values());
 }
 
 export default function Calendar() {
-  const [host, setHost] = useState("");
+  const [host, setHost] = useState('');
   const [activeMonth, setActiveMonth] = useState<Date>(() => startOfMonth(new Date()));
-  const [loading, setLoading] = useState(true);
+
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [days, setDays] = useState<Record<string, DaySummary>>({});
+
+  // All events grouped by day: { '2025-11-10': [event, event...] }
+  const [eventsByDay, setEventsByDay] = useState<Record<string, ApiEvent[]>>({});
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedYmd, setSelectedYmd] = useState<string | null>(null);
-  const [dayEvents, setDayEvents] = useState<ApiEvent[]>([]);
-  const [dayLoading, setDayLoading] = useState(false);
-  const [dayError, setDayError] = useState<string | null>(null);
+  const [selectedEvents, setSelectedEvents] = useState<ApiEvent[]>([]);
 
+  // Figure out which city we are (based on domain)
   useEffect(() => {
-    if (typeof window !== "undefined") setHost(window.location.hostname || "");
+    if (typeof window !== 'undefined') {
+      setHost(window.location.hostname || '');
+    }
   }, []);
+
   const city = getCityFromHost(host);
 
-  // Fetch month summary (tops + moreCount)
+  // Fetch events for the current month from /api/events (server already filters by date)
   useEffect(() => {
-    const from = startOfMonth(activeMonth);
-    const to = endOfMonth(activeMonth);
-    const qs = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() }).toString();
+    async function load() {
+      const from = startOfMonth(activeMonth);
+      const to = endOfMonth(activeMonth);
 
-    setLoading(true);
-    setError(null);
-    fetch(`/api/events-local-local/summary?${qs}`, { cache: "no-store" })
-      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then((json: { days?: DaySummary[] }) => {
-        const map: Record<string, DaySummary> = {};
-        for (const d of json.days || []) map[d.date] = d;
-        setDays(map);
-      })
-      .catch(() => setError("We couldnâ€™t load events for this month."))
-      .finally(() => setLoading(false));
+      const params = new URLSearchParams({
+        start: from.toISOString(),
+        end: to.toISOString(),
+      });
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        const res = await fetch(`/api/events?${params.toString()}`, {
+          cache: 'no-store',
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        const raw = Array.isArray(data.events) ? (data.events as ApiEvent[]) : [];
+
+        const cleaned = dedupeEventsClient(raw.filter((e) => !isJunkEvent(e)));
+
+        // Group into days
+        const map: Record<string, ApiEvent[]> = {};
+        for (const e of cleaned) {
+          if (!e.start) continue;
+          const ymd = localYmd(new Date(e.start));
+          if (!map[ymd]) map[ymd] = [];
+          map[ymd].push(e);
+        }
+
+        // Sort by time inside each day
+        for (const ymd of Object.keys(map)) {
+          map[ymd].sort((a, b) => {
+            const ta = a.start ? +new Date(a.start) : 0;
+            const tb = b.start ? +new Date(b.start) : 0;
+            return ta - tb;
+          });
+        }
+
+        setEventsByDay(map);
+      } catch (err) {
+        console.error(err);
+        setError("We couldn't load events for this month.");
+        setEventsByDay({});
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    load();
   }, [activeMonth]);
 
-  // 6x7 grid
+  // Build summaries used for the grid cells (tops + moreCount)
+  const daySummaries = useMemo<Record<string, DaySummary>>(() => {
+    const out: Record<string, DaySummary> = {};
+
+    for (const [ymd, events] of Object.entries(eventsByDay)) {
+      const tops = events.slice(0, 2);
+      out[ymd] = {
+        date: ymd,
+        tops,
+        moreCount: Math.max(0, events.length - tops.length),
+      };
+    }
+
+    return out;
+  }, [eventsByDay]);
+
+  // 6x7 calendar grid
   const gridDates = useMemo(() => {
     const first = startOfMonth(activeMonth);
     const start = new Date(first);
+    // Back up to Sunday
     start.setDate(first.getDate() - first.getDay());
+
     const arr: Date[] = [];
     for (let i = 0; i < 42; i++) {
       const d = new Date(start);
@@ -120,179 +209,226 @@ export default function Calendar() {
   }, [activeMonth]);
 
   const monthLabel = useMemo(
-    () => activeMonth.toLocaleString(undefined, { month: "long", year: "numeric" }),
-    [activeMonth]
+    () =>
+      activeMonth.toLocaleString(undefined, {
+        month: 'long',
+        year: 'numeric',
+      }),
+    [activeMonth],
   );
 
   function openDay(ymd: string) {
+    const events = eventsByDay[ymd] ?? [];
     setSelectedYmd(ymd);
+    setSelectedEvents(events);
     setModalOpen(true);
-    setDayLoading(true);
-    setDayError(null);
-    const fromISO = `${ymd}T00:00:00.000`;
-    const toISO = `${ymd}T23:59:59.999`;
-    const qs = new URLSearchParams({ from: fromISO, to: toISO }).toString();
-
-    fetch(`/api/events-local?${qs}`, { cache: "no-store" })
-      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then((json: { events?: ApiEvent[] }) => {
-        const all = Array.isArray(json.events) ? json.events : [];
-        const cleaned = all.filter((e) => !isJunkEvent(e));              // <- filter junk first
-        const deduped = dedupeEventsClient(cleaned)                      // <- strong dedupe
-          .sort((a, b) => +new Date(a.start) - +new Date(b.start));
-        setDayEvents(deduped);
-      })
-      .catch(() => setDayError("Couldnâ€™t load events for this day."))
-      .finally(() => setDayLoading(false));
   }
 
   function closeModal() {
     setModalOpen(false);
     setSelectedYmd(null);
-    setDayEvents([]);
-    setDayError(null);
-    setDayLoading(false);
+    setSelectedEvents([]);
   }
 
+  // ESC to close modal
   useEffect(() => {
     if (!modalOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeModal(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeModal();
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [modalOpen]);
 
   return (
-    <div className="rounded-2xl border border-gray-800 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 bg-gray-900/60 border-b border-gray-800">
-        <div className="text-lg font-semibold">{city.city}, {city.state} â€” {monthLabel}</div>
-        <div className="flex gap-2">
+    <section className="mt-6 rounded-xl border border-gray-800 bg-black/40 p-4 md:p-6">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">
+            {city.city}, {city.state} — {monthLabel}
+          </h2>
+          <p className="text-sm text-gray-400">
+            Click any day to see all events pulled from <code>events.json</code>.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
           <button
-            className="btn btn-sm"
+            type="button"
             onClick={() => setActiveMonth((m) => addMonths(m, -1))}
+            className="rounded border border-gray-700 px-2 py-1 text-sm hover:bg-gray-800"
             aria-label="Previous month"
-            title="Previous month"
           >
-            â€¹
+            ‹
           </button>
           <button
-            className="btn btn-sm"
-            onClick={() => setActiveMonth((m) => addMonths(m, +1))}
-            aria-label="Next month"
-            title="Next month"
+            type="button"
+            onClick={() => setActiveMonth(startOfMonth(new Date()))}
+            className="rounded border border-gray-700 px-3 py-1 text-sm hover:bg-gray-800"
           >
-            â€º
+            Today
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveMonth((m) => addMonths(m, +1))}
+            className="rounded border border-gray-700 px-2 py-1 text-sm hover:bg-gray-800"
+            aria-label="Next month"
+          >
+            ›
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="px-4 py-3 text-sm text-red-400 border-b border-gray-800">
+        <div className="mt-3 rounded-md border border-red-700 bg-red-900/30 px-3 py-2 text-sm text-red-200">
           {error}
         </div>
       )}
 
-      <div className="grid grid-cols-7 gap-px bg-gray-800">
+      {/* Weekday header */}
+      <div className="mt-4 grid grid-cols-7 gap-px text-center text-xs font-semibold uppercase tracking-wide text-gray-400">
         {Array.from({ length: 7 }).map((_, i) => (
-          <div key={`wd-${i}`} className="bg-gray-950 px-3 py-2 text-xs font-medium text-gray-300 sticky top-0 z-10">
+          <div key={i} className="py-1">
             {weekdayShort(i)}
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-px bg-gray-800">
+      {/* Date cells */}
+      <div className="mt-1 grid grid-cols-7 gap-px rounded-lg bg-gray-900/60">
         {gridDates.map((d) => {
           const ymd = localYmd(d);
           const inMonth = d.getMonth() === activeMonth.getMonth();
           const today = isSameDay(d, new Date());
-          const summary = days[ymd];
+          const summary = daySummaries[ymd];
 
           return (
-            <div
+            <button
               key={ymd}
-              role="button"
-              tabIndex={0}
+              type="button"
               onClick={() => openDay(ymd)}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openDay(ymd); }}
-              className={`bg-gray-950 p-3 min-h-28 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 ${inMonth ? "" : "opacity-40"}`}
-              aria-label={`Open events for ${ymd}`}
-              title={`Open events for ${ymd}`}
+              className={[
+                'flex min-h-[110px] flex-col items-stretch bg-gray-950 p-2 text-left text-xs transition-colors',
+                inMonth ? '' : 'opacity-40',
+                today ? 'border border-blue-500' : 'border border-transparent',
+                'hover:bg-gray-900',
+              ].join(' ')}
             >
-              <div className="flex items-center justify-between mb-2">
-                <div className={`text-xs ${today ? "px-2 py-0.5 rounded bg-blue-500/10 text-blue-300" : "text-gray-400"}`}>
-                  {d.getDate()}
-                </div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-sm font-semibold">{d.getDate()}</span>
                 {summary && summary.moreCount > 0 && (
-                  <div className="text-[11px] text-gray-400">+{summary.moreCount} more</div>
+                  <span className="rounded bg-blue-900/50 px-2 py-0.5 text-[10px] text-blue-100">
+                    +{summary.moreCount} more
+                  </span>
                 )}
               </div>
 
-              {loading ? (
-                <div className="text-xs text-gray-500">Loadingâ€¦</div>
-              ) : summary && summary.tops.length > 0 ? (
-                <div className="flex flex-col gap-1">
-                  {summary.tops.slice(0, 2).map((ev) => (
-                    <a
-                      key={ev.id}
-                      href={ev.url || "#"}
-                      className="block text-xs hover:underline"
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(e) => e.stopPropagation()}
+              <div className="mt-1 flex-1 space-y-1">
+                {loading ? (
+                  <span className="text-[11px] text-gray-500">Loading…</span>
+                ) : summary && summary.tops.length > 0 ? (
+                  summary.tops.map((ev) => (
+                    <div
+                      key={ev.id ?? `${ev.title}-${ev.start}`}
+                      className="rounded bg-gray-800/70 px-1.5 py-1 text-[11px] leading-snug"
                     >
-                      <div className="truncate font-medium text-gray-200">{ev.title}</div>
-                      <div className="truncate text-[11px] text-gray-500">
-                        {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                        {ev.venue ? ` â€¢ ${ev.venue}` : ""}
-                        {ev.source ? ` â€¢ ${ev.source}` : ""}
+                      <div className="truncate font-medium">{ev.title}</div>
+                      <div className="truncate text-[10px] text-gray-400">
+                        {ev.start &&
+                          new Date(ev.start).toLocaleTimeString(undefined, {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}
+                        {ev.venue ? ` • ${ev.venue}` : ''}
+                        {ev.source ? ` • ${ev.source}` : ''}
                       </div>
-                    </a>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-gray-500">No events for this day.</div>
-              )}
-            </div>
+                    </div>
+                  ))
+                ) : (
+                  <span className="text-[11px] text-gray-600">No events.</span>
+                )}
+              </div>
+            </button>
           );
         })}
       </div>
 
       {/* Modal */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" aria-modal="true" role="dialog">
-          <div className="absolute inset-0 bg-black/60" onClick={closeModal} />
-          <div className="relative w-full sm:max-w-2xl max-h-[85vh] overflow-hidden rounded-2xl bg-gray-950 border border-gray-800 shadow-xl m-0 sm:m-6">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-              <div className="text-sm text-gray-400">
-                {selectedYmd
-                  ? new Date(selectedYmd + "T00:00:00").toLocaleDateString(undefined, {
-                      weekday: "short", month: "short", day: "numeric", year: "numeric",
-                    })
-                  : ""}
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
+          <div className="max-h-[80vh] w-full max-w-xl overflow-hidden rounded-xl border border-gray-700 bg-gray-950">
+            <div className="flex items-center justify-between border-b border-gray-800 px-4 py-2">
+              <div className="text-sm font-semibold">
+                {selectedYmd &&
+                  new Date(selectedYmd + 'T00:00:00').toLocaleDateString(
+                    undefined,
+                    {
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    },
+                  )}
               </div>
-              <button className="btn btn-sm" onClick={closeModal} aria-label="Close">âœ•</button>
+              <button
+                type="button"
+                onClick={closeModal}
+                className="rounded px-2 py-1 text-sm text-gray-300 hover:bg-gray-800"
+              >
+                ✕
+              </button>
             </div>
 
-            <div className="p-4 overflow-auto">
-              {dayLoading && <div className="text-sm text-gray-500">Loading all eventsâ€¦</div>}
-              {dayError && <div className="text-sm text-red-400">{dayError}</div>}
-              {!dayLoading && !dayError && dayEvents.length === 0 && (
-                <div className="text-sm text-gray-500">No events for this day.</div>
+            <div className="max-h-[70vh] overflow-y-auto px-4 py-3 text-sm">
+              {selectedEvents.length === 0 && (
+                <div className="text-gray-400">No events for this day.</div>
               )}
-              {!dayLoading && !dayError && dayEvents.length > 0 && (
+
+              {selectedEvents.length > 0 && (
                 <ul className="space-y-3">
-                  {dayEvents.map((ev) => (
-                    <li key={ev.id} className="rounded-lg border border-gray-800 p-3 hover:border-gray-700">
-                      <a href={ev.url || "#"} target="_blank" rel="noreferrer" className="block">
-                        <div className="font-medium text-gray-100 truncate">{ev.title}</div>
-                        <div className="text-xs text-gray-400 truncate">
-                          {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                          {ev.end ? `â€“${new Date(ev.end).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
-                          {ev.venue ? ` â€¢ ${ev.venue}` : ""}
-                          {ev.address ? ` â€¢ ${ev.address}` : ""}
-                          {ev.source ? ` â€¢ ${ev.source}` : ""}
-                          {ev.free === true ? " â€¢ Free" : ""}
-                        </div>
-                      </a>
+                  {selectedEvents.map((ev) => (
+                    <li
+                      key={ev.id ?? `${ev.title}-${ev.start}`}
+                      className="rounded border border-gray-800 bg-gray-900/60 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-semibold">{ev.title}</div>
+                        {ev.free === true && (
+                          <span className="rounded bg-green-800/60 px-2 py-0.5 text-[11px] text-green-100">
+                            Free
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 text-xs text-gray-300">
+                        {ev.start &&
+                          new Date(ev.start).toLocaleTimeString(undefined, {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}
+                        {ev.end &&
+                          `–${new Date(ev.end).toLocaleTimeString(undefined, {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}`}
+                      </div>
+                      <div className="mt-1 text-xs text-gray-400">
+                        {ev.venue}
+                        {ev.venue && ev.address ? ' • ' : ''}
+                        {ev.address}
+                        {ev.source ? ` • ${ev.source}` : ''}
+                      </div>
+                      {ev.url && (
+                        <a
+                          href={ev.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-2 inline-block text-xs font-medium text-blue-300 hover:underline"
+                        >
+                          View details / tickets ↗
+                        </a>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -301,8 +437,6 @@ export default function Calendar() {
           </div>
         </div>
       )}
-    </div>
+    </section>
   );
 }
-
-
