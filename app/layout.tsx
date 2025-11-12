@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <SiteNav />
         </header>
 
-        {/* fixes mojibake like â€” â€¢ after hydration */}
+        {/* fixes mojibake like — • after hydration */}
         <EncodingFix />
 
         <main id="main" className="mx-auto max-w-6xl px-4 py-6 space-y-6">

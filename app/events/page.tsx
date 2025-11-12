@@ -55,7 +55,7 @@ export default function EventsPage() {
     <div className="container py-6 md:py-10">
       <h1 className="text-2xl md:text-3xl font-bold mb-1">Upcoming Events</h1>
       <p className="text-gray-300 mb-5">City-wide events in {city.city}, {city.state}.</p>
-      <p className="text-xs text-gray-500 mb-4">Range: {debug.from?.slice(0,10)} â†’ {debug.to?.slice(0,10)} Â· Found: {debug.count ?? 0}</p>
+      <p className="text-xs text-gray-500 mb-4">Range: {debug.from?.slice(0,10)} → {debug.to?.slice(0,10)} · Found: {debug.count ?? 0}</p>
       {events.length === 0 && <div className="card">No events yet for this range.</div>}
       <div className="grid gap-4">
         {events.map(e => (<EventCard key={e.id} e={e} />))}
