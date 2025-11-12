@@ -1,4 +1,3 @@
-﻿'use client';
 import { NextRequest, NextResponse } from "next/server";
 import { getCityFromHost } from "@/lib/cities";
 
