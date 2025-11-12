@@ -77,6 +77,7 @@ export class GeoapifyProvider implements ProviderClient {
       const p = f.properties || {};
       const coords = Array.isArray(f.geometry?.coordinates) ? f.geometry.coordinates : [undefined, undefined];
       const addr = p.formatted || [p.address_line1, p.address_line2].filter(Boolean).join(", ");
+      const rawCategories = Array.isArray(p.categories) ? p.categories : [];
       return {
         id: p.place_id || `${p.osm_id || ""}-${p.name || ""}-${addr}`,
         name: p.name || "Unknown",
@@ -89,7 +90,7 @@ export class GeoapifyProvider implements ProviderClient {
         lng: typeof coords[0] === "number" ? coords[0] : undefined,
         photoUrl: undefined,
         source: "geoapify",
-        categories: Array.isArray(p.categories) ? p.categories : [],
+        categories: rawCategories.map((c: unknown) => (typeof c === "string" ? c : String(c))).filter(Boolean),
       };
     });
 
