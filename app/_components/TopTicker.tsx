@@ -46,7 +46,7 @@ export default function TopTicker() {
   const loop = [...chips, ...chips];
 
   return (
-    <div className="ticker-rail">
+    <div className="ticker-rail" suppressHydrationWarning>
       <div className="ticker-track" aria-label="Local updates">
         {loop.map((c, i) => (
           <span key={i} className={`ticker-chip ${c.type==="weather"?"ticker-chip-weather":"ticker-chip-news"}`} title={c.text}>
