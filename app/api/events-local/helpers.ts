@@ -123,8 +123,13 @@ export async function loadFilteredEvents(url: URL): Promise<FilteredEventsResult
   const from = fromParam ? safeDate(fromParam) : null;
   const to = toParam ? safeDate(toParam) : null;
 
+  const rawTo = toParam?.trim() ?? "";
+  const dateOnlyTo = rawTo !== "" && !/[Tt]/.test(rawTo);
+
   const startMs = from ? from.getTime() : Number.NEGATIVE_INFINITY;
-  const endMs = to ? to.getTime() : Number.POSITIVE_INFINITY;
+  const endMs = to
+    ? to.getTime() + (dateOnlyTo ? 24 * 60 * 60 * 1000 - 1 : 0)
+    : Number.POSITIVE_INFINITY;
 
   const [rawEvents, external] = await Promise.all([
     loadEvents(),

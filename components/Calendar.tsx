@@ -25,7 +25,9 @@ type DaySummary = {
 function pad2(n: number) { return n < 10 ? "0" + n : String(n); }
 function localYmd(d: Date) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
-function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
+function endOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+}
 function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getMonth() + m, Math.min(d.getDate(), 28)); }
 function isSameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function weekdayShort(i: number) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][i]; }
@@ -139,9 +141,13 @@ export default function Calendar() {
     setModalOpen(true);
     setDayLoading(true);
     setDayError(null);
-    const fromISO = `${ymd}T00:00:00.000`;
-    const toISO = `${ymd}T23:59:59.999`;
-    const qs = new URLSearchParams({ cityHost: city.host, from: fromISO, to: toISO }).toString();
+    const fromDate = new Date(`${ymd}T00:00:00`);
+    const toDate = new Date(`${ymd}T23:59:59.999`);
+    const qs = new URLSearchParams({
+      cityHost: city.host,
+      from: fromDate.toISOString(),
+      to: toDate.toISOString(),
+    }).toString();
 
     fetch(`/api/events-local?${qs}`, { cache: "no-store" })
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })

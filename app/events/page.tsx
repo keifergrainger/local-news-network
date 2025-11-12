@@ -3,13 +3,6 @@ import { useEffect, useMemo, useState } from 'react';
 import EventCard, { LocalEvent } from '@/components/EventCard';
 import { getCityFromHost } from '@/lib/cities';
 
-function ymd(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-}
-
 const DEFAULT_HOST = 'saltlakeut.com';
 
 export default function EventsPage() {
@@ -25,14 +18,22 @@ export default function EventsPage() {
   }, []);
   const city = getCityFromHost(host || DEFAULT_HOST);
 
-  const from = useMemo(() => new Date(), []);
-  const to = useMemo(() => new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), []);
+  const fromIso = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return start.toISOString();
+  }, []);
+  const toIso = useMemo(() => {
+    const end = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    end.setHours(23, 59, 59, 999);
+    return end.toISOString();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       if (!city?.host) return;
-      const qs = new URLSearchParams({ cityHost: city.host, from: ymd(from), to: ymd(to) }).toString();
+      const qs = new URLSearchParams({ cityHost: city.host, from: fromIso, to: toIso }).toString();
       try {
         const res = await fetch(`/api/events-local?${qs}`, { cache: 'no-store' });
         if (!res.ok) throw new Error(String(res.status));
@@ -49,7 +50,7 @@ export default function EventsPage() {
     }
     load();
     return () => { cancelled = true; };
-  }, [city.host, from, to]);
+  }, [city.host, fromIso, toIso]);
 
   return (
     <div className="container py-6 md:py-10">
