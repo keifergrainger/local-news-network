@@ -1,30 +1,14 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
-import { getEnvNumber, Provider, ProviderClient, SearchInput } from "@/lib/providers/base";
-import { GooglePlacesProvider } from "@/lib/providers/googlePlaces";
-import { YelpProvider } from "@/lib/providers/yelp";
-import { GeoapifyProvider } from "@/lib/providers/geoapify";
+import { getEnvNumber, SearchInput } from "@/lib/providers/base";
 import { getCityFromHost } from "@/lib/cities";
+import { resolveProvider } from "@/lib/providers/registry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function getProvider(): { name: Provider; client: ProviderClient; missingKey: boolean } {
-  const p = (process.env.BUSINESS_PROVIDER || "google").toLowerCase() as Provider;
-  if (p === "geoapify") {
-    const key = process.env.GEOAPIFY_API_KEY || "";
-    return { name: "geoapify", client: new GeoapifyProvider(key), missingKey: !key };
-  }
-  if (p === "yelp") {
-    const key = process.env.YELP_API_KEY || "";
-    return { name: "yelp", client: new YelpProvider(key), missingKey: !key };
-  }
-  const key = process.env.GOOGLE_MAPS_API_KEY || "";
-  return { name: "google", client: new GooglePlacesProvider(key), missingKey: !key };
-}
-
 export async function GET(req: NextRequest) {
   const t0 = Date.now();
-  const { name: provider, client, missingKey } = getProvider();
+  const { name: provider, client, missingKey } = resolveProvider();
 
   const host = req.headers.get("host") || "";
   const city = getCityFromHost(host);

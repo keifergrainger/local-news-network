@@ -2,13 +2,11 @@
 import CategoryChips from "./_components/CategoryChips";
 import SearchBar from "./_components/SearchBar";
 import DirectoryGrid from "./_components/DirectoryGrid";
-import { GooglePlacesProvider } from "@/lib/providers/googlePlaces";
-import { YelpProvider } from "@/lib/providers/yelp";
-import { GeoapifyProvider } from "@/lib/providers/geoapify";
-import { getEnvNumber, Provider, ProviderClient } from "@/lib/providers/base";
+import { getEnvNumber } from "@/lib/providers/base";
 import { Business } from "@/types/business";
 import { headers } from "next/headers";
 import { getCityFromHost, cityLabel } from "@/lib/cities";
+import { resolveProvider } from "@/lib/providers/registry";
 
 export const metadata: Metadata = {
   title: "Best Local Businesses &mdash; Directory",
@@ -16,37 +14,6 @@ export const metadata: Metadata = {
 };
 
 const DEFAULT_CATEGORY = "Coffee";
-
-async function serverSearch(params: {
-  q?: string | null;
-  category?: string | null;
-  lat?: number;
-  lng?: number;
-  radius?: number;
-  page?: string | null;
-}): Promise<{ items: Business[]; nextCursor: string | null; provider: Provider }> {
-  const providerName = (process.env.BUSINESS_PROVIDER || "google").toLowerCase() as Provider;
-  const client: ProviderClient =
-    providerName === "yelp"
-      ? new YelpProvider(process.env.YELP_API_KEY)
-      : providerName === "geoapify"
-      ? new GeoapifyProvider(process.env.GEOAPIFY_API_KEY)
-      : new GooglePlacesProvider(process.env.GOOGLE_MAPS_API_KEY);
-
-  try {
-    const res = await client.searchBusinesses({
-      q: params.q || null,
-      category: params.category || DEFAULT_CATEGORY,
-      lat: params.lat!,
-      lng: params.lng!,
-      radius: params.radius ?? getEnvNumber(process.env.CITY_RADIUS_M, 15000),
-      page: params.page || null,
-    });
-    return { items: res.items, nextCursor: res.nextCursor, provider: res.provider };
-  } catch {
-    return { items: [], nextCursor: null, provider: providerName };
-  }
-}
 
 export default async function Page({
   searchParams,
@@ -59,14 +26,39 @@ export default async function Page({
   const category = typeof searchParams.category === "string" ? searchParams.category : DEFAULT_CATEGORY;
   const q = typeof searchParams.q === "string" ? searchParams.q : undefined;
   const page = typeof searchParams.page === "string" ? searchParams.page : undefined;
+  const latParam = typeof searchParams.lat === "string" ? Number(searchParams.lat) : undefined;
+  const lngParam = typeof searchParams.lng === "string" ? Number(searchParams.lng) : undefined;
+  const radiusParam = typeof searchParams.radius === "string" ? Number(searchParams.radius) : undefined;
 
-  const { items, nextCursor, provider } = await serverSearch({
-    q,
-    category,
-    lat: city.lat,
-    lng: city.lon,
-    page,
-  });
+  const lat = Number.isFinite(latParam) ? (latParam as number) : city.lat;
+  const lng = Number.isFinite(lngParam) ? (lngParam as number) : city.lon;
+  const radius = Number.isFinite(radiusParam)
+    ? (radiusParam as number)
+    : getEnvNumber(process.env.CITY_RADIUS_M, 15000);
+
+  const { client, name: providerName, missingKey } = resolveProvider();
+
+  let items: Business[] = [];
+  let nextCursor: string | null = null;
+  let provider: "google" | "yelp" | "geoapify" = providerName;
+
+  if (!missingKey) {
+    try {
+      const res = await client.searchBusinesses({
+        q: q || null,
+        category: category || DEFAULT_CATEGORY,
+        lat,
+        lng,
+        radius,
+        page: page || null,
+      });
+      items = res.items;
+      nextCursor = res.nextCursor;
+      provider = res.provider;
+    } catch {
+      // swallow to render fallback UI + provider warning
+    }
+  }
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -78,9 +70,8 @@ export default async function Page({
     })),
   };
 
-  const p = (process.env.BUSINESS_PROVIDER || "google").toLowerCase();
-  const missingProviderKey =
-    p === "google" ? !process.env.GOOGLE_MAPS_API_KEY : p === "yelp" ? !process.env.YELP_API_KEY : !process.env.GEOAPIFY_API_KEY;
+  const missingProviderKey = missingKey;
+  const providerLabel = providerName;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6">
@@ -100,7 +91,9 @@ export default async function Page({
 
       {missingProviderKey ? (
         <div className="mt-6 rounded-2xl border border-yellow-700 bg-yellow-900/20 p-4 text-yellow-200">
-          <p className="text-sm">API key missing for provider <code className="rounded bg-black/40 px-1">{p}</code>.</p>
+          <p className="text-sm">
+            API key missing for provider <code className="rounded bg-black/40 px-1">{providerLabel}</code>.
+          </p>
         </div>
       ) : null}
 
