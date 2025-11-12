@@ -1,3 +1,4 @@
+﻿'use client';
 export default function SubmitPage(){
   return (<div className="py-8">
     <h1 className="text-3xl font-bold mb-4">Submit Your Event</h1>
@@ -17,3 +18,4 @@ export default function SubmitPage(){
     </div>
   </div>);
 }
+

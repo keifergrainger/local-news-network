@@ -1,6 +1,5 @@
+﻿'use client';
 // components/WeatherTicker.tsx
-"use client";
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCityFromHost } from "@/lib/cities";
 
@@ -157,7 +156,7 @@ export default function WeatherTicker() {
     return () => { if (t) window.clearInterval(t); };
   }, [city.lat, city.lon]);
 
-  // sequence: 2 news → 1 weather
+  // sequence: 2 news â†’ 1 weather
   const items = useMemo(() => {
     const out: Array<{ kind: "news" | "weather"; data?: Article }> = [];
     let n = 0;
@@ -225,15 +224,15 @@ function TickerItem(props: { kind: "news" | "weather"; data?: Article; weather: 
     const w = props.weather; const dir = degToDir(w?.wind?.dir);
     return (
       <div className="mx-1 inline-flex flex-none items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-blue-100">
-        <span className="text-base leading-none">⛅</span>
+        <span className="text-base leading-none">â›…</span>
         <span className="text-sm font-semibold leading-none">
-          {w?.temp != null ? Math.round(w.temp) : "--"}°{w?.unit || "F"}
+          {w?.temp != null ? Math.round(w.temp) : "--"}Â°{w?.unit || "F"}
         </span>
         <span className="text-[11px] leading-none opacity-90">
           {w?.desc || "Weather"}
-          {w?.feelsLike != null ? ` • Feels ${Math.round(w.feelsLike)}°` : ""}
-          {w?.wind?.speed != null ? ` • ${dir ?? ""}${dir ? " " : ""}${Math.round(w.wind?.speed!)} mph` : ""}
-          {w?.humidity != null ? ` • Hum ${Math.round(w.humidity)}%` : ""}
+          {w?.feelsLike != null ? ` â€¢ Feels ${Math.round(w.feelsLike)}Â°` : ""}
+          {w?.wind?.speed != null ? ` â€¢ ${dir ?? ""}${dir ? " " : ""}${Math.round(w.wind?.speed!)} mph` : ""}
+          {w?.humidity != null ? ` â€¢ Hum ${Math.round(w.humidity)}%` : ""}
         </span>
       </div>
     );
@@ -249,10 +248,11 @@ function TickerItem(props: { kind: "news" | "weather"; data?: Article; weather: 
         rel="noreferrer"
         className="group mx-1 inline-flex flex-none items-center gap-2 rounded-full border border-slate-700 bg-slate-800/70 px-3 py-1 text-slate-100 hover:bg-slate-800"
       >
-        <span className="text-[11px] text-slate-300 leading-none">{time}{a.source ? ` • ${a.source}` : ""}</span>
+        <span className="text-[11px] text-slate-300 leading-none">{time}{a.source ? ` â€¢ ${a.source}` : ""}</span>
         <span className="text-sm max-w-[32rem] truncate leading-none">{a.title}</span>
       </a>
-      <span className="mx-1 text-slate-600" aria-hidden>•</span>
+      <span className="mx-1 text-slate-600" aria-hidden>â€¢</span>
     </>
   );
 }
+

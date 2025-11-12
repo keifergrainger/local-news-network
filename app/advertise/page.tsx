@@ -1,3 +1,4 @@
+﻿'use client';
 export default function AdvertisePage(){
   return (<div className="py-8">
     <h1 className="text-3xl font-bold mb-4">Advertise With Us</h1>
@@ -12,3 +13,4 @@ export default function AdvertisePage(){
     </div>
   </div>);
 }
+

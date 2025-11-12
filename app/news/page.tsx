@@ -1,3 +1,4 @@
+﻿'use client';
 export default function NewsPage(){
   return (<div className="py-8">
     <h1 className="text-3xl font-bold mb-4">Local News</h1>
@@ -11,3 +12,4 @@ export default function NewsPage(){
     </div>
   </div>);
 }
+

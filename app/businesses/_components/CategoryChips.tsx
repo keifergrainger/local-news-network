@@ -1,44 +1,39 @@
-'use client';
+﻿'use client';
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useMemo } from 'react';
-
-const DEFAULT_CATEGORIES = [
-  'Coffee', 'Restaurants', 'Plumbers', 'HVAC', 'Electricians',
-  'Bars', 'Gyms', 'Landscapers', 'Pest Control', 'Real Estate',
+const CATEGORIES = [
+  "Coffee","Restaurants","Plumbers","HVAC","Electricians","Bars","Gyms","Landscapers","Pest Control","Real Estate",
 ];
 
-export default function CategoryChips({ categories = DEFAULT_CATEGORIES }: { categories?: string[] }) {
+export default function CategoryChips() {
+  const sp = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const sp = useSearchParams();
-  const active = sp.get('category') || 'Coffee';
-
-  const qs = useMemo(() => new URLSearchParams(sp.toString()), [sp]);
+  const active = sp.get("category") || "Coffee";
 
   function setCategory(cat: string) {
-    qs.set('category', cat);
-    qs.delete('page'); // reset pagination
+    const qs = new URLSearchParams(sp.toString());
+    qs.set("category", cat);
+    qs.delete("page");
     router.push(`${pathname}?${qs.toString()}`);
   }
 
   return (
-    <div className="flex items-center gap-2 overflow-x-auto py-2">
-      {categories.map((c) => {
-        const isActive = c === active;
+    <div className="scrollbar-hide flex gap-2 overflow-x-auto py-1">
+      {CATEGORIES.map((cat) => {
+        const isActive = active === cat;
         return (
           <button
-            key={c}
-            onClick={() => setCategory(c)}
-            className={`flex-shrink-0 rounded-full px-3 py-1 text-sm border transition
-              ${isActive ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-700 text-gray-200 hover:bg-gray-800'}`}
+            key={cat}
+            className={`chip whitespace-nowrap ${isActive ? "chip-active" : ""}`}
+            onClick={() => setCategory(cat)}
             aria-pressed={isActive}
-            aria-label={`Filter category ${c}`}
           >
-            {c}
+            {cat}
           </button>
         );
       })}
     </div>
   );
 }
+

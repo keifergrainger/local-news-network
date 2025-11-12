@@ -1,6 +1,5 @@
+﻿'use client';
 // components/Calendar.tsx
-"use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { getCityFromHost } from "@/lib/cities";
 
@@ -95,14 +94,14 @@ export default function Calendar() {
 
     setLoading(true);
     setError(null);
-    fetch(`/api/events/summary?${qs}`, { cache: "no-store" })
+    fetch(`/api/events-local-local/summary?${qs}`, { cache: "no-store" })
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then((json: { days?: DaySummary[] }) => {
         const map: Record<string, DaySummary> = {};
         for (const d of json.days || []) map[d.date] = d;
         setDays(map);
       })
-      .catch(() => setError("We couldn’t load events for this month."))
+      .catch(() => setError("We couldnâ€™t load events for this month."))
       .finally(() => setLoading(false));
   }, [activeMonth]);
 
@@ -134,7 +133,7 @@ export default function Calendar() {
     const toISO = `${ymd}T23:59:59.999`;
     const qs = new URLSearchParams({ from: fromISO, to: toISO }).toString();
 
-    fetch(`/api/events?${qs}`, { cache: "no-store" })
+    fetch(`/api/events-local?${qs}`, { cache: "no-store" })
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then((json: { events?: ApiEvent[] }) => {
         const all = Array.isArray(json.events) ? json.events : [];
@@ -143,7 +142,7 @@ export default function Calendar() {
           .sort((a, b) => +new Date(a.start) - +new Date(b.start));
         setDayEvents(deduped);
       })
-      .catch(() => setDayError("Couldn’t load events for this day."))
+      .catch(() => setDayError("Couldnâ€™t load events for this day."))
       .finally(() => setDayLoading(false));
   }
 
@@ -165,7 +164,7 @@ export default function Calendar() {
   return (
     <div className="rounded-2xl border border-gray-800 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 bg-gray-900/60 border-b border-gray-800">
-        <div className="text-lg font-semibold">{city.city}, {city.state} — {monthLabel}</div>
+        <div className="text-lg font-semibold">{city.city}, {city.state} â€” {monthLabel}</div>
         <div className="flex gap-2">
           <button
             className="btn btn-sm"
@@ -173,7 +172,7 @@ export default function Calendar() {
             aria-label="Previous month"
             title="Previous month"
           >
-            ‹
+            â€¹
           </button>
           <button
             className="btn btn-sm"
@@ -181,7 +180,7 @@ export default function Calendar() {
             aria-label="Next month"
             title="Next month"
           >
-            ›
+            â€º
           </button>
         </div>
       </div>
@@ -228,7 +227,7 @@ export default function Calendar() {
               </div>
 
               {loading ? (
-                <div className="text-xs text-gray-500">Loading…</div>
+                <div className="text-xs text-gray-500">Loadingâ€¦</div>
               ) : summary && summary.tops.length > 0 ? (
                 <div className="flex flex-col gap-1">
                   {summary.tops.slice(0, 2).map((ev) => (
@@ -243,8 +242,8 @@ export default function Calendar() {
                       <div className="truncate font-medium text-gray-200">{ev.title}</div>
                       <div className="truncate text-[11px] text-gray-500">
                         {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                        {ev.venue ? ` • ${ev.venue}` : ""}
-                        {ev.source ? ` • ${ev.source}` : ""}
+                        {ev.venue ? ` â€¢ ${ev.venue}` : ""}
+                        {ev.source ? ` â€¢ ${ev.source}` : ""}
                       </div>
                     </a>
                   ))}
@@ -270,11 +269,11 @@ export default function Calendar() {
                     })
                   : ""}
               </div>
-              <button className="btn btn-sm" onClick={closeModal} aria-label="Close">✕</button>
+              <button className="btn btn-sm" onClick={closeModal} aria-label="Close">âœ•</button>
             </div>
 
             <div className="p-4 overflow-auto">
-              {dayLoading && <div className="text-sm text-gray-500">Loading all events…</div>}
+              {dayLoading && <div className="text-sm text-gray-500">Loading all eventsâ€¦</div>}
               {dayError && <div className="text-sm text-red-400">{dayError}</div>}
               {!dayLoading && !dayError && dayEvents.length === 0 && (
                 <div className="text-sm text-gray-500">No events for this day.</div>
@@ -287,11 +286,11 @@ export default function Calendar() {
                         <div className="font-medium text-gray-100 truncate">{ev.title}</div>
                         <div className="text-xs text-gray-400 truncate">
                           {new Date(ev.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                          {ev.end ? `–${new Date(ev.end).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
-                          {ev.venue ? ` • ${ev.venue}` : ""}
-                          {ev.address ? ` • ${ev.address}` : ""}
-                          {ev.source ? ` • ${ev.source}` : ""}
-                          {ev.free === true ? " • Free" : ""}
+                          {ev.end ? `â€“${new Date(ev.end).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
+                          {ev.venue ? ` â€¢ ${ev.venue}` : ""}
+                          {ev.address ? ` â€¢ ${ev.address}` : ""}
+                          {ev.source ? ` â€¢ ${ev.source}` : ""}
+                          {ev.free === true ? " â€¢ Free" : ""}
                         </div>
                       </a>
                     </li>
@@ -305,3 +304,5 @@ export default function Calendar() {
     </div>
   );
 }
+
+

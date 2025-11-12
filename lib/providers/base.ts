@@ -1,17 +1,14 @@
-// ===============================================
-// 1) lib/providers/base.ts  (REPLACE the whole file)
-// ===============================================
-import { Business } from '@/types/business';
+﻿import { Business } from "@/types/business";
 
-export type Provider = 'google' | 'yelp' | 'geoapify';
+export type Provider = "google" | "yelp" | "geoapify";
 
 export type SearchInput = {
   q?: string | null;
   category?: string | null;
   lat: number;
   lng: number;
-  radius: number; // meters
-  page?: string | null; // provider cursor (token or offset)
+  radius: number;   // meters
+  page?: string | null; // token or offset
 };
 
 export type ProviderResult = {
