@@ -18,7 +18,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="bg-slate-950 text-gray-100 antialiased">
         <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur supports-[backdrop-filter]:bg-slate-950/70">
-          <ClientTicker suppressHydrationWarning />
+          <div suppressHydrationWarning>
+            <ClientTicker />
+          </div>
           <SiteNav />
         </header>
 

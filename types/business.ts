@@ -9,6 +9,6 @@ export type Business = {
   lat?: number;
   lng?: number;
   photoUrl?: string;
-  source: 'google' | 'yelp';
+  source: 'google' | 'yelp' | 'geoapify';
   categories: string[];
 };
