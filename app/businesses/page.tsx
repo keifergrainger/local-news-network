@@ -37,6 +37,7 @@ export default async function Page({
     : getEnvNumber(process.env.CITY_RADIUS_M, 15000);
 
   const { client, name: providerName, missingKey } = resolveProvider();
+  const referer = host ? `https://${host}` : undefined;
 
   let items: Business[] = [];
   let nextCursor: string | null = null;
@@ -51,6 +52,7 @@ export default async function Page({
         lng,
         radius,
         page: page || null,
+        referer,
       });
       items = res.items;
       nextCursor = res.nextCursor;

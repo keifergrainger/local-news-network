@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
   const { name: provider, client, missingKey } = resolveProvider();
 
   const host = req.headers.get("host") || "";
+  const referer = host ? `https://${host}` : undefined;
   const city = getCityFromHost(host);
 
   const url = new URL(req.url);
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const input: SearchInput = { q, category, lat, lng, radius, page };
+    const input: SearchInput = { q, category, lat, lng, radius, page, referer };
     const res = await client.searchBusinesses(input);
     const tookMs = Date.now() - t0;
     return NextResponse.json({ ...res, tookMs });

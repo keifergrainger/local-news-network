@@ -25,6 +25,7 @@ async function serverSearch(params: {
   lng?: number;
   radius?: number;
   page?: string | null;
+  referer?: string | null;
 }): Promise<{ items: Business[]; nextCursor: string | null; provider: Provider }> {
   const providerName = (process.env.BUSINESS_PROVIDER || "google").toLowerCase() as Provider;
   const client: ProviderClient =
@@ -42,6 +43,7 @@ async function serverSearch(params: {
       lng: params.lng!,
       radius: params.radius ?? getEnvNumber(process.env.CITY_RADIUS_M, 15000),
       page: params.page || null,
+      referer: params.referer || null,
     });
     return { items: res.items, nextCursor: res.nextCursor, provider: res.provider };
   } catch {
@@ -56,6 +58,7 @@ export default async function Page({
 }) {
   const host = headers().get("host") || "";
   const city = getCityFromHost(host);
+  const referer = host ? `https://${host}` : undefined;
 
   const category = typeof searchParams.category === "string" ? searchParams.category : DEFAULT_CATEGORY;
   const q = typeof searchParams.q === "string" ? searchParams.q : undefined;
@@ -67,6 +70,7 @@ export default async function Page({
     lat: city.lat,
     lng: city.lon,
     page,
+    referer,
   });
 
   const jsonLd = {

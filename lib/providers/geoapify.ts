@@ -68,7 +68,13 @@ export class GeoapifyProvider implements ProviderClient {
     url.searchParams.set("lang", "en");
     url.searchParams.set("apiKey", this.apiKey);
 
-    const r = await fetch(url.toString(), { next: { revalidate: 3600 } });
+    const headers: Record<string, string> = {};
+    if (input.referer) headers["referer"] = input.referer;
+
+    const r = await fetch(url.toString(), {
+      next: { revalidate: 3600 },
+      headers: Object.keys(headers).length ? headers : undefined,
+    });
     if (!r.ok) throw new Error(`Geoapify error ${r.status}`);
     const j: any = await r.json();
 

@@ -9,6 +9,7 @@ export type SearchInput = {
   lng: number;
   radius: number;   // meters
   page?: string | null; // token or offset
+  referer?: string | null;
 };
 
 export type ProviderResult = {
