@@ -1,6 +1,7 @@
 import { getCityFromHost } from "@/lib/cities";
 import type { CityConfig } from "@/lib/cities";
 import { loadEvents, safeDate, type EventItem } from "../_events-util";
+import { loadExternalEvents } from "../events/sources";
 
 export type NormalizedEvent = {
   id: string;
@@ -92,8 +93,21 @@ function normalizeEvent(event: EventItem, idx: number): NormalizedEvent | null {
   };
 }
 
+function simpleNorm(s = "") {
+  return s
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 export async function loadFilteredEvents(url: URL): Promise<FilteredEventsResult> {
-  const hostParam = url.searchParams.get("cityHost") || url.searchParams.get("host") || url.hostname;
+  const hostParam =
+    url.searchParams.get("cityHost") ||
+    url.searchParams.get("host") ||
+    url.hostname ||
+    "saltlakeut.com";
   const city = getCityFromHost(hostParam || undefined);
 
   const latParam = parseNumberParam(url.searchParams.get("lat"));
@@ -112,10 +126,17 @@ export async function loadFilteredEvents(url: URL): Promise<FilteredEventsResult
   const startMs = from ? from.getTime() : Number.NEGATIVE_INFINITY;
   const endMs = to ? to.getTime() : Number.POSITIVE_INFINITY;
 
-  const rawEvents = await loadEvents();
-  const normalized: NormalizedEvent[] = [];
+  const [rawEvents, external] = await Promise.all([
+    loadEvents(),
+    loadExternalEvents(city, from, to, radiusMiles),
+  ]);
 
-  rawEvents.forEach((ev, idx) => {
+  const combined: EventItem[] = [...rawEvents, ...external];
+  const normalized: NormalizedEvent[] = [];
+  const seenIds = new Set<string>();
+  const seenTitle = new Set<string>();
+
+  combined.forEach((ev, idx) => {
     const mapped = normalizeEvent(ev, idx);
     if (!mapped) return;
     const eventTime = new Date(mapped.start).getTime();
@@ -126,6 +147,15 @@ export async function loadFilteredEvents(url: URL): Promise<FilteredEventsResult
       if (distance > radiusMiles) return;
     }
 
+    const idKey = mapped.id;
+    if (idKey && seenIds.has(idKey)) return;
+    const titleKey = `${simpleNorm(mapped.title)}|${new Date(mapped.start).toISOString()}|${simpleNorm(
+      mapped.venue ?? mapped.address ?? ""
+    )}`;
+    if (seenTitle.has(titleKey)) return;
+
+    if (idKey) seenIds.add(idKey);
+    seenTitle.add(titleKey);
     normalized.push(mapped);
   });
 

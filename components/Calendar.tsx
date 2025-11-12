@@ -67,8 +67,10 @@ function dedupeEventsClient(events: ApiEvent[]): ApiEvent[] {
   return Array.from(seen.values());
 }
 
+const DEFAULT_HOST = "saltlakeut.com";
+
 export default function Calendar() {
-  const [host, setHost] = useState("");
+  const [host, setHost] = useState(DEFAULT_HOST);
   const [activeMonth, setActiveMonth] = useState<Date>(() => startOfMonth(new Date()));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,9 +84,12 @@ export default function Calendar() {
   const [dayError, setDayError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (typeof window !== "undefined") setHost(window.location.hostname || "");
+    if (typeof window === "undefined") return;
+    const current = window.location.hostname || "";
+    const resolved = getCityFromHost(current);
+    setHost(resolved?.host || DEFAULT_HOST);
   }, []);
-  const city = getCityFromHost(host);
+  const city = getCityFromHost(host || DEFAULT_HOST);
 
   // Fetch month summary (tops + moreCount)
   useEffect(() => {

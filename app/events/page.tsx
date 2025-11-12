@@ -10,13 +10,20 @@ function ymd(d: Date) {
   return `${y}-${m}-${dd}`;
 }
 
+const DEFAULT_HOST = 'saltlakeut.com';
+
 export default function EventsPage() {
-  const [host, setHost] = useState('');
+  const [host, setHost] = useState(DEFAULT_HOST);
   const [events, setEvents] = useState<LocalEvent[]>([]);
   const [debug, setDebug] = useState<{from?: string; to?: string; count?: number}>({});
 
-  useEffect(() => { if (typeof window !== 'undefined') setHost(window.location.hostname); }, []);
-  const city = getCityFromHost(host);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const current = window.location.hostname || '';
+    const resolved = getCityFromHost(current);
+    setHost(resolved?.host || DEFAULT_HOST);
+  }, []);
+  const city = getCityFromHost(host || DEFAULT_HOST);
 
   const from = useMemo(() => new Date(), []);
   const to = useMemo(() => new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), []);
