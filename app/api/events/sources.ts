@@ -18,6 +18,7 @@ export type RawEvent = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TM_PAGE_SIZE = 200;
 const TM_MAX_PAGES = 12;
+const TM_ENDPOINT = "https://app.ticketmaster.com/discovery/v2/events.json";
 
 const dtfCache = new Map<string, Intl.DateTimeFormat>();
 function getTimeZoneOffset(date: Date, timeZone: string) {
@@ -170,6 +171,78 @@ export function dedupeEvents(events: RawEvent[]) {
   return Array.from(keep.values()).flat();
 }
 
+type TicketmasterPage = {
+  events: RawEvent[];
+  totalPages: number;
+  done: boolean;
+};
+
+function mapTicketmasterEvents(arr: any[], page: number): RawEvent[] {
+  return arr
+    .map((ev, idx) => {
+      const rawStart = ev?.dates?.start?.dateTime || ev?.dates?.start?.localDate;
+      if (!rawStart) return null;
+      const startISO = rawStart.includes("T")
+        ? new Date(rawStart).toISOString()
+        : new Date(`${rawStart}T00:00:00`).toISOString();
+      const rawEnd = ev?.dates?.end?.dateTime || undefined;
+      const venue = ev?._embedded?.venues?.[0];
+      const lat = Number(venue?.location?.latitude);
+      const lng = Number(venue?.location?.longitude);
+      const event: RawEvent = {
+        id: `tm:${ev?.id ?? `${page}-${idx}`}`,
+        title: ev?.name ?? "Untitled",
+        start: startISO,
+        end: rawEnd ? new Date(rawEnd).toISOString() : undefined,
+        venue: venue?.name ?? undefined,
+        address:
+          [venue?.address?.line1, venue?.city?.name, venue?.state?.stateCode]
+            .filter(Boolean)
+            .join(", ") || undefined,
+        url: ev?.url ?? undefined,
+        source: "Ticketmaster",
+        free: Array.isArray(ev?.priceRanges) ? ev.priceRanges.some((p: any) => Number(p?.min) === 0) : undefined,
+        lat: Number.isFinite(lat) ? lat : undefined,
+        lng: Number.isFinite(lng) ? lng : undefined,
+      };
+      return event;
+    })
+    .filter((x): x is RawEvent => !!x);
+}
+
+async function fetchTicketmasterPage(
+  query: string,
+  page: number,
+  start: Date,
+  end: Date
+): Promise<TicketmasterPage> {
+  try {
+    const params = new URLSearchParams(query);
+    params.set("page", String(page));
+    const res = await fetch(`${TM_ENDPOINT}?${params}`, { cache: "no-store" });
+    if (!res.ok) {
+      return { events: [], totalPages: page + 1, done: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    const arr: any[] = data?._embedded?.events || [];
+    if (!arr.length) {
+      const totalPages = Number(data?.page?.totalPages ?? page + 1);
+      return { events: [], totalPages, done: true };
+    }
+    const mapped = mapTicketmasterEvents(arr, page);
+    const filtered = mapped.filter((ev) => {
+      const t = new Date(ev.start).getTime();
+      return t >= start.getTime() - DAY_MS && t <= end.getTime() + DAY_MS;
+    });
+    const earliest = mapped[0] ? new Date(mapped[0].start).getTime() : null;
+    const done = earliest != null && earliest > end.getTime() + DAY_MS;
+    const totalPages = Number(data?.page?.totalPages ?? page + 1);
+    return { events: filtered, totalPages, done };
+  } catch {
+    return { events: [], totalPages: page + 1, done: true };
+  }
+}
+
 export async function fetchTicketmasterEvents(
   city: CityConfig,
   start: Date,
@@ -179,7 +252,7 @@ export async function fetchTicketmasterEvents(
   const key = process.env.TICKETMASTER_KEY;
   if (!key) return [];
 
-  const qs = new URLSearchParams({
+  const baseParams = new URLSearchParams({
     apikey: key,
     sort: "date,asc",
     size: String(TM_PAGE_SIZE),
@@ -189,74 +262,35 @@ export async function fetchTicketmasterEvents(
     startDateTime: toTicketmasterISO(new Date(start.getTime() - DAY_MS)),
     endDateTime: toTicketmasterISO(new Date(end.getTime() + DAY_MS)),
   });
+  const baseQuery = baseParams.toString();
 
-  const pages: RawEvent[][] = [];
+  const first = await fetchTicketmasterPage(baseQuery, 0, start, end);
+  const collected: RawEvent[][] = [first.events];
 
-  for (let page = 0; page < TM_MAX_PAGES; page++) {
-    qs.set("page", String(page));
-
-    try {
-      const res = await fetch(`https://app.ticketmaster.com/discovery/v2/events.json?${qs}`, { cache: "no-store" });
-      if (!res.ok) break;
-      const data = await res.json().catch(() => ({}));
-      const arr: any[] = data?._embedded?.events || [];
-      if (!arr.length) break;
-
-      const mapped = arr
-        .map((ev, idx) => {
-            const rawStart = ev?.dates?.start?.dateTime || ev?.dates?.start?.localDate;
-            if (!rawStart) return null;
-            const startISO = rawStart.includes("T")
-              ? new Date(rawStart).toISOString()
-              : new Date(`${rawStart}T00:00:00`).toISOString();
-            const rawEnd = ev?.dates?.end?.dateTime || undefined;
-            const venue = ev?._embedded?.venues?.[0];
-            const lat = Number(venue?.location?.latitude);
-            const lng = Number(venue?.location?.longitude);
-            const event: RawEvent = {
-              id: `tm:${ev?.id ?? `${page}-${idx}`}`,
-              title: ev?.name ?? "Untitled",
-              start: startISO,
-              end: rawEnd ? new Date(rawEnd).toISOString() : undefined,
-              venue: venue?.name ?? undefined,
-              address: [venue?.address?.line1, venue?.city?.name, venue?.state?.stateCode]
-                .filter(Boolean)
-                .join(", ") || undefined,
-              url: ev?.url ?? undefined,
-              source: "Ticketmaster",
-              free: Array.isArray(ev?.priceRanges) ? ev.priceRanges.some((p: any) => Number(p?.min) === 0) : undefined,
-              lat: Number.isFinite(lat) ? lat : undefined,
-              lng: Number.isFinite(lng) ? lng : undefined,
-            };
-            return event;
-          })
-        .filter((x): x is RawEvent => !!x);
-
-      const filtered = mapped.filter((ev) => {
-        const t = new Date(ev.start).getTime();
-        return t >= start.getTime() - DAY_MS && t <= end.getTime() + DAY_MS;
-      });
-
-      pages.push(filtered);
-
-      const firstEvent = mapped[0];
-      if (firstEvent) {
-        const firstTime = new Date(firstEvent.start).getTime();
-        if (Number.isFinite(firstTime) && firstTime > end.getTime() + DAY_MS) {
-          break;
-        }
-      }
-
-      const totalPages = Number(data?.page?.totalPages ?? 0);
-      if (!Number.isFinite(totalPages) || page >= totalPages - 1) {
-        break;
-      }
-    } catch {
-      break;
-    }
+  if (first.done) {
+    return collected.flat();
   }
 
-  return pages.flat();
+  const totalPages = Math.min(TM_MAX_PAGES, Math.max(1, first.totalPages));
+  if (totalPages <= 1) {
+    return collected.flat();
+  }
+
+  const tasks: Array<Promise<TicketmasterPage>> = [];
+  for (let page = 1; page < totalPages; page++) {
+    tasks.push(fetchTicketmasterPage(baseQuery, page, start, end));
+  }
+  const rest = await Promise.all(tasks);
+  for (const result of rest) {
+    if (!result.events.length) {
+      if (result.done) break;
+      continue;
+    }
+    collected.push(result.events);
+    if (result.done) break;
+  }
+
+  return collected.flat();
 }
 
 type IcsProperty = { value: string; params: Record<string, string> };

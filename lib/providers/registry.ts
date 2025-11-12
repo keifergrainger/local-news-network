@@ -11,6 +11,14 @@ type ProviderInfo = {
 
 const PROVIDER_ORDER: Provider[] = ["geoapify", "google", "yelp"];
 
+function envKey(...names: string[]) {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value) return value;
+  }
+  return "";
+}
+
 function normalizePreferred(name?: string | null): Provider {
   const slug = (name || "").toLowerCase();
   if (slug === "google" || slug === "yelp" || slug === "geoapify") return slug;
@@ -18,15 +26,15 @@ function normalizePreferred(name?: string | null): Provider {
 }
 
 function providerKey(name: Provider): string {
-  if (name === "google") return process.env.GOOGLE_MAPS_API_KEY || "";
-  if (name === "yelp") return process.env.YELP_API_KEY || "";
-  return process.env.GEOAPIFY_API_KEY || "";
+  if (name === "google") return envKey("GOOGLE_MAPS_API_KEY", "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY");
+  if (name === "yelp") return envKey("YELP_API_KEY", "NEXT_PUBLIC_YELP_API_KEY");
+  return envKey("GEOAPIFY_API_KEY", "NEXT_PUBLIC_GEOAPIFY_API_KEY");
 }
 
 function createClient(name: Provider): ProviderClient {
-  if (name === "google") return new GooglePlacesProvider(process.env.GOOGLE_MAPS_API_KEY);
-  if (name === "yelp") return new YelpProvider(process.env.YELP_API_KEY);
-  return new GeoapifyProvider(process.env.GEOAPIFY_API_KEY);
+  if (name === "google") return new GooglePlacesProvider(providerKey("google"));
+  if (name === "yelp") return new YelpProvider(providerKey("yelp"));
+  return new GeoapifyProvider(providerKey("geoapify"));
 }
 
 export function resolveProvider(preferred?: Provider): ProviderInfo {
