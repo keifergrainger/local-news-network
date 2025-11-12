@@ -1,4 +1,4 @@
-﻿export type CityConfig = {
+export type CityConfig = {
   host: string;
   city: string;
   state: string;

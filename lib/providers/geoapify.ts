@@ -1,4 +1,4 @@
-﻿import { Business } from "@/types/business";
+import { Business } from "@/types/business";
 import { getEnvNumber, ProviderClient, ProviderResult, SearchInput } from "./base";
 
 const API = "https://api.geoapify.com/v2/places";

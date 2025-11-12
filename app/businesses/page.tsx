@@ -1,4 +1,4 @@
-﻿import { Metadata } from "next";
+import { Metadata } from "next";
 import CategoryChips from "./_components/CategoryChips";
 import SearchBar from "./_components/SearchBar";
 import DirectoryGrid from "./_components/DirectoryGrid";
