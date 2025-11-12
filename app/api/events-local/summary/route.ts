@@ -1,12 +1,50 @@
 import { NextResponse } from "next/server";
 import { loadFilteredEvents, type NormalizedEvent } from "../helpers";
 
-function pad2(n: number) {
-  return n < 10 ? `0${n}` : String(n);
+const dayFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function ensureDayFormatter(timeZone: string) {
+  let fmt = dayFormatterCache.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    dayFormatterCache.set(timeZone, fmt);
+  }
+  return fmt;
 }
 
-function localYmd(date: Date) {
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+function ymdInTimeZone(date: Date, timeZone: string) {
+  const fmt = ensureDayFormatter(timeZone);
+  const parts = fmt.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type === "literal") continue;
+    map[part.type] = part.value;
+  }
+  const year = map.year ?? String(date.getUTCFullYear());
+  const month = map.month ?? String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = map.day ?? String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function extractYearMonth(date: Date | null, timeZone: string) {
+  if (!date) return null;
+  const fmt = ensureDayFormatter(timeZone);
+  const parts = fmt.formatToParts(date);
+  let year: number | null = null;
+  let month: number | null = null;
+  for (const part of parts) {
+    if (part.type === "year") year = Number(part.value);
+    if (part.type === "month") month = Number(part.value);
+  }
+  if (Number.isFinite(year) && Number.isFinite(month)) {
+    return { year: year!, month: month! };
+  }
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1 };
 }
 
 function thinEvent(e: NormalizedEvent) {
@@ -29,19 +67,13 @@ export async function GET(req: Request) {
   try {
     const { city, center, range, events } = await loadFilteredEvents(url);
 
+    const timeZone = city.timeZone || "UTC";
     const anchor = range.from ?? range.to ?? null;
-    const monthStart = anchor
-      ? new Date(anchor.getFullYear(), anchor.getMonth(), 1)
-      : null;
-    const monthEnd = anchor
-      ? new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0, 23, 59, 59, 999)
-      : null;
-    const monthStartMs = monthStart ? monthStart.getTime() : null;
-    const monthEndMs = monthEnd ? monthEnd.getTime() : null;
+    const anchorMonth = extractYearMonth(anchor, timeZone);
 
     const byDay = new Map<string, NormalizedEvent[]>();
     for (const ev of events) {
-      const day = localYmd(new Date(ev.start));
+      const day = ymdInTimeZone(new Date(ev.start), timeZone);
       const list = byDay.get(day) ?? [];
       list.push(ev);
       byDay.set(day, list);
@@ -49,11 +81,10 @@ export async function GET(req: Request) {
 
     const days = Array.from(byDay.entries())
       .filter(([date]) => {
-        if (monthStartMs == null || monthEndMs == null) return true;
-        const [y, m, d] = date.split("-").map((part) => Number(part));
-        if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
-        const cellMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0);
-        return cellMs >= monthStartMs && cellMs <= monthEndMs;
+        if (!anchorMonth) return true;
+        const [y, m] = date.split("-").map((part) => Number(part));
+        if (!Number.isFinite(y) || !Number.isFinite(m)) return false;
+        return y === anchorMonth.year && m === anchorMonth.month;
       })
       .map(([date, list]) => {
         const sorted = list.slice().sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
