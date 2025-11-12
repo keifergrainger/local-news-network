@@ -17,6 +17,7 @@ export type RawEvent = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TM_PAGE_SIZE = 200;
+const TM_MAX_PAGES = 5;
 
 const dtfCache = new Map<string, Intl.DateTimeFormat>();
 function getTimeZoneOffset(date: Date, timeZone: string) {
@@ -189,47 +190,64 @@ export async function fetchTicketmasterEvents(
     endDateTime: toTicketmasterISO(new Date(end.getTime() + DAY_MS)),
   });
 
-  try {
-    const res = await fetch(`https://app.ticketmaster.com/discovery/v2/events.json?${qs}`, { cache: "no-store" });
-    if (!res.ok) return [];
-    const data = await res.json().catch(() => ({}));
-    const arr: any[] = data?._embedded?.events || [];
-    return arr
-      .map((ev, idx) => {
-        const rawStart = ev?.dates?.start?.dateTime || ev?.dates?.start?.localDate;
-        if (!rawStart) return null;
-        const startISO = rawStart.includes("T")
-          ? new Date(rawStart).toISOString()
-          : new Date(`${rawStart}T00:00:00`).toISOString();
-        const rawEnd = ev?.dates?.end?.dateTime || undefined;
-        const venue = ev?._embedded?.venues?.[0];
-        const lat = Number(venue?.location?.latitude);
-        const lng = Number(venue?.location?.longitude);
-        const event: RawEvent = {
-          id: `tm:${ev?.id ?? idx}`,
-          title: ev?.name ?? "Untitled",
-          start: startISO,
-          end: rawEnd ? new Date(rawEnd).toISOString() : undefined,
-          venue: venue?.name ?? undefined,
-          address: [venue?.address?.line1, venue?.city?.name, venue?.state?.stateCode]
-            .filter(Boolean)
-            .join(", ") || undefined,
-          url: ev?.url ?? undefined,
-          source: "Ticketmaster",
-          free: Array.isArray(ev?.priceRanges) ? ev.priceRanges.some((p: any) => Number(p?.min) === 0) : undefined,
-          lat: Number.isFinite(lat) ? lat : undefined,
-          lng: Number.isFinite(lng) ? lng : undefined,
-        };
-        return event;
-      })
-      .filter((x): x is RawEvent => !!x)
-      .filter((ev) => {
-        const t = new Date(ev.start).getTime();
-        return t >= start.getTime() - DAY_MS && t <= end.getTime() + DAY_MS;
-      });
-  } catch {
-    return [];
+  const pages: RawEvent[][] = [];
+
+  for (let page = 0; page < TM_MAX_PAGES; page++) {
+    qs.set("page", String(page));
+
+    try {
+      const res = await fetch(`https://app.ticketmaster.com/discovery/v2/events.json?${qs}`, { cache: "no-store" });
+      if (!res.ok) break;
+      const data = await res.json().catch(() => ({}));
+      const arr: any[] = data?._embedded?.events || [];
+      if (!arr.length) break;
+
+      pages.push(
+        arr
+          .map((ev, idx) => {
+            const rawStart = ev?.dates?.start?.dateTime || ev?.dates?.start?.localDate;
+            if (!rawStart) return null;
+            const startISO = rawStart.includes("T")
+              ? new Date(rawStart).toISOString()
+              : new Date(`${rawStart}T00:00:00`).toISOString();
+            const rawEnd = ev?.dates?.end?.dateTime || undefined;
+            const venue = ev?._embedded?.venues?.[0];
+            const lat = Number(venue?.location?.latitude);
+            const lng = Number(venue?.location?.longitude);
+            const event: RawEvent = {
+              id: `tm:${ev?.id ?? `${page}-${idx}`}`,
+              title: ev?.name ?? "Untitled",
+              start: startISO,
+              end: rawEnd ? new Date(rawEnd).toISOString() : undefined,
+              venue: venue?.name ?? undefined,
+              address: [venue?.address?.line1, venue?.city?.name, venue?.state?.stateCode]
+                .filter(Boolean)
+                .join(", ") || undefined,
+              url: ev?.url ?? undefined,
+              source: "Ticketmaster",
+              free: Array.isArray(ev?.priceRanges) ? ev.priceRanges.some((p: any) => Number(p?.min) === 0) : undefined,
+              lat: Number.isFinite(lat) ? lat : undefined,
+              lng: Number.isFinite(lng) ? lng : undefined,
+            };
+            return event;
+          })
+          .filter((x): x is RawEvent => !!x)
+          .filter((ev) => {
+            const t = new Date(ev.start).getTime();
+            return t >= start.getTime() - DAY_MS && t <= end.getTime() + DAY_MS;
+          })
+      );
+
+      const totalPages = Number(data?.page?.totalPages ?? 0);
+      if (!Number.isFinite(totalPages) || page >= totalPages - 1) {
+        break;
+      }
+    } catch {
+      break;
+    }
   }
+
+  return pages.flat();
 }
 
 type IcsProperty = { value: string; params: Record<string, string> };
