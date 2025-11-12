@@ -1,5 +1,4 @@
 ﻿'use client';
-import EventsFromJson from "../../components/EventsFromJson";
 import { useEffect, useMemo, useState } from 'react';
 import EventCard, { LocalEvent } from '@/components/EventCard';
 import { getCityFromHost } from '@/lib/cities';
@@ -23,21 +22,26 @@ export default function EventsPage() {
   const to = useMemo(() => new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), []);
 
   useEffect(() => {
+    let cancelled = false;
     async function load() {
       if (!city?.host) return;
       const qs = new URLSearchParams({ cityHost: city.host, from: ymd(from), to: ymd(to) }).toString();
-      const res = await fetch(`/api/events-local?${qs}`, { cache: 'no-store' }).catch(() => null);
-      if (!res) return;
-      let data: any = {};
-try {
-  const __t = await res.text();
-  data = __t && __t.trim() ? JSON.parse(__t) : {};
-} catch {
-  data = {};
-}setEvents(Array.isArray(data.events) ? data.events : []);
-      setDebug({ from: data.from, to: data.to, count: data.count });
+      try {
+        const res = await fetch(`/api/events-local?${qs}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(String(res.status));
+        const data: any = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        const list = Array.isArray(data?.events) ? (data.events as LocalEvent[]) : [];
+        setEvents(list);
+        setDebug({ from: data?.from, to: data?.to, count: data?.count ?? list.length });
+      } catch {
+        if (cancelled) return;
+        setEvents([]);
+        setDebug({});
+      }
     }
     load();
+    return () => { cancelled = true; };
   }, [city.host, from, to]);
 
   return (
@@ -52,9 +56,4 @@ try {
     </div>
   );
 }
-
-<EventsFromJson year={2025} month={11} />
-
-
-
 

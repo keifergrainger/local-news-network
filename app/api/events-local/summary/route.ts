@@ -1,51 +1,63 @@
-﻿'use client';
 import { NextResponse } from "next/server";
-import fs from "fs/promises";
-import path from "path";
+import { loadFilteredEvents, type NormalizedEvent } from "../helpers";
+
+function pad2(n: number) {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+function localYmd(date: Date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function thinEvent(e: NormalizedEvent) {
+  return {
+    id: e.id,
+    title: e.title,
+    start: e.start,
+    end: e.end ?? undefined,
+    venue: e.venue ?? undefined,
+    address: e.address ?? undefined,
+    url: e.url ?? undefined,
+    source: e.source ?? undefined,
+    free: e.free ?? undefined,
+  };
+}
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const from = url.searchParams.get("from");
-  const to = url.searchParams.get("to");
-  const start = from ? new Date(from) : null;
-  const end = to ? new Date(to) : null;
 
-  const p = path.join(process.cwd(), "public", "events.json");
-  let items: any[] = [];
   try {
-    const raw = await fs.readFile(p, "utf8");
-    const parsed = JSON.parse(raw);
-    items = Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return NextResponse.json([], { status: 200 });
-  }
+    const { city, center, range, events } = await loadFilteredEvents(url);
 
-  // Date filter
-  if (start || end) {
-    items = items.filter((e) => {
-      const s = e?.start ? new Date(e.start) : null;
-      if (!s || Number.isNaN(+s)) return false;
-      if (start && s < start) return false;
-      if (end && s > end) return false;
-      return true;
+    const byDay = new Map<string, NormalizedEvent[]>();
+    for (const ev of events) {
+      const day = localYmd(new Date(ev.start));
+      const list = byDay.get(day) ?? [];
+      list.push(ev);
+      byDay.set(day, list);
+    }
+
+    const days = Array.from(byDay.entries())
+      .map(([date, list]) => {
+        const sorted = list.slice().sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+        const tops = sorted.slice(0, 2).map(thinEvent);
+        return {
+          date,
+          tops,
+          moreCount: Math.max(0, sorted.length - tops.length),
+        };
+      })
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+    return NextResponse.json({
+      city: { city: city.city, state: city.state },
+      center,
+      from: range.from ? range.from.toISOString() : null,
+      to: range.to ? range.to.toISOString() : null,
+      total: events.length,
+      days,
     });
+  } catch {
+    return NextResponse.json({ city: null, center: null, from: null, to: null, total: 0, days: [] });
   }
-
-  const byDay = new Map<string, number>();
-  for (const e of items) {
-    const d = e?.start ? new Date(e.start) : null;
-    if (!d || Number.isNaN(+d)) continue;
-    const yyyy = d.getUTCFullYear();
-    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const dd = String(d.getUTCDate()).padStart(2, "0");
-    const key = `${yyyy}-${mm}-${dd}`;
-    byDay.set(key, (byDay.get(key) ?? 0) + 1);
-  }
-
-  const out = Array.from(byDay.entries())
-    .map(([date, count]) => ({ date, count }))
-    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-
-  return NextResponse.json(out, { status: 200 });
 }
-

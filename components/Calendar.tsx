@@ -88,13 +88,18 @@ export default function Calendar() {
 
   // Fetch month summary (tops + moreCount)
   useEffect(() => {
+    if (!city?.host) return;
     const from = startOfMonth(activeMonth);
     const to = endOfMonth(activeMonth);
-    const qs = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() }).toString();
+    const qs = new URLSearchParams({
+      cityHost: city.host,
+      from: from.toISOString(),
+      to: to.toISOString(),
+    }).toString();
 
     setLoading(true);
     setError(null);
-    fetch(`/api/events-local-local/summary?${qs}`, { cache: "no-store" })
+    fetch(`/api/events-local/summary?${qs}`, { cache: "no-store" })
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then((json: { days?: DaySummary[] }) => {
         const map: Record<string, DaySummary> = {};
@@ -103,7 +108,7 @@ export default function Calendar() {
       })
       .catch(() => setError("We couldnâ€™t load events for this month."))
       .finally(() => setLoading(false));
-  }, [activeMonth]);
+  }, [activeMonth, city.host]);
 
   // 6x7 grid
   const gridDates = useMemo(() => {
@@ -131,7 +136,7 @@ export default function Calendar() {
     setDayError(null);
     const fromISO = `${ymd}T00:00:00.000`;
     const toISO = `${ymd}T23:59:59.999`;
-    const qs = new URLSearchParams({ from: fromISO, to: toISO }).toString();
+    const qs = new URLSearchParams({ cityHost: city.host, from: fromISO, to: toISO }).toString();
 
     fetch(`/api/events-local?${qs}`, { cache: "no-store" })
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
