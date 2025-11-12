@@ -20,8 +20,10 @@ export default async function Page({
 }: {
   searchParams: Record<string, string | string[] | undefined>;
 }) {
-  const host = headers().get("host") || "";
-  const city = getCityFromHost(host);
+  const hostHeader = headers().get("host") || "";
+  const city = getCityFromHost(hostHeader);
+  const normalizedHost = hostHeader.toLowerCase();
+  const refererHost = normalizedHost.includes(city.host) ? hostHeader : city.host;
 
   const category = typeof searchParams.category === "string" ? searchParams.category : DEFAULT_CATEGORY;
   const q = typeof searchParams.q === "string" ? searchParams.q : undefined;
@@ -37,7 +39,7 @@ export default async function Page({
     : getEnvNumber(process.env.CITY_RADIUS_M, 15000);
 
   const { client, name: providerName, missingKey } = resolveProvider();
-  const referer = host ? `https://${host}` : undefined;
+  const referer = refererHost ? `https://${refererHost}` : undefined;
 
   let items: Business[] = [];
   let nextCursor: string | null = null;

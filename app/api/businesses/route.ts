@@ -10,9 +10,11 @@ export async function GET(req: NextRequest) {
   const t0 = Date.now();
   const { name: provider, client, missingKey } = resolveProvider();
 
-  const host = req.headers.get("host") || "";
-  const referer = host ? `https://${host}` : undefined;
-  const city = getCityFromHost(host);
+  const hostHeader = req.headers.get("host") || "";
+  const city = getCityFromHost(hostHeader);
+  const normalizedHost = hostHeader.toLowerCase();
+  const refererHost = normalizedHost.includes(city.host) ? hostHeader : city.host;
+  const referer = refererHost ? `https://${refererHost}` : undefined;
 
   const url = new URL(req.url);
   const q = url.searchParams.get("q");
@@ -23,7 +25,7 @@ export async function GET(req: NextRequest) {
   const page = url.searchParams.get("page");
 
   // helps verify city & filters in your terminal
-  console.log("[/api/businesses]", { host, city: `${city.city}, ${city.state}`, provider, category, q });
+  console.log("[/api/businesses]", { host: hostHeader, city: `${city.city}, ${city.state}`, provider, category, q });
 
   if (missingKey) {
     const tookMs = Date.now() - t0;
