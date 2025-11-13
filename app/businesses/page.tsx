@@ -5,6 +5,7 @@ import DirectoryGrid from "./_components/DirectoryGrid";
 import { getEnvNumber } from "@/lib/providers/base";
 import { headers } from "next/headers";
 import { getCityFromHost, cityLabel } from "@/lib/cities";
+import { DEFAULT_GEOAPIFY_API_KEY } from "@/lib/providers/geoapify";
 
 export const metadata: Metadata = {
   title: "Best Local Businesses &mdash; Directory",
@@ -18,7 +19,8 @@ export default async function Page() {
   const city = getCityFromHost(hostHeader);
   const radius = getEnvNumber(process.env.CITY_RADIUS_M, 15000);
 
-  const geoapifyApiKey = process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY || process.env.GEOAPIFY_API_KEY || "";
+  const geoapifyApiKey =
+    process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY || process.env.GEOAPIFY_API_KEY || DEFAULT_GEOAPIFY_API_KEY;
   const missingGeoapifyKey = !geoapifyApiKey;
   const providerLabel = "geoapify";
 

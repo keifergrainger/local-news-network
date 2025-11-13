@@ -1,6 +1,8 @@
 ﻿import { Business } from "@/types/business";
 import { ProviderClient, ProviderResult, SearchInput } from "./base";
 
+export const DEFAULT_GEOAPIFY_API_KEY = "a282b97ff57f4432ae1a463c9d960d16";
+
 const API = "https://api.geoapify.com/v2/places";
 
 // --- helpers ---
@@ -35,7 +37,9 @@ function categoriesFor(category?: string | null): string | null {
 
 export class GeoapifyProvider implements ProviderClient {
   apiKey: string;
-  constructor(apiKey?: string) { this.apiKey = apiKey || ""; }
+  constructor(apiKey?: string) {
+    this.apiKey = apiKey || "";
+  }
 
   async searchBusinesses(input: SearchInput): Promise<ProviderResult> {
     if (!this.apiKey) return { items: [], nextCursor: null, provider: "geoapify" };

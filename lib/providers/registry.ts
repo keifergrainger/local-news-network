@@ -1,7 +1,7 @@
 import { Provider, ProviderClient } from "./base";
 import { GooglePlacesProvider } from "./googlePlaces";
 import { YelpProvider } from "./yelp";
-import { GeoapifyProvider } from "./geoapify";
+import { GeoapifyProvider, DEFAULT_GEOAPIFY_API_KEY } from "./geoapify";
 
 type ProviderInfo = {
   name: Provider;
@@ -28,7 +28,7 @@ function normalizePreferred(name?: string | null): Provider {
 function providerKey(name: Provider): string {
   if (name === "google") return envKey("GOOGLE_MAPS_API_KEY", "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY");
   if (name === "yelp") return envKey("YELP_API_KEY", "NEXT_PUBLIC_YELP_API_KEY");
-  return envKey("GEOAPIFY_API_KEY", "NEXT_PUBLIC_GEOAPIFY_API_KEY");
+  return envKey("GEOAPIFY_API_KEY", "NEXT_PUBLIC_GEOAPIFY_API_KEY") || DEFAULT_GEOAPIFY_API_KEY;
 }
 
 function createClient(name: Provider): ProviderClient {
