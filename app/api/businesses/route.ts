@@ -4,6 +4,7 @@ import { GooglePlacesProvider } from "@/lib/providers/googlePlaces";
 import { YelpProvider } from "@/lib/providers/yelp";
 import { GeoapifyProvider } from "@/lib/providers/geoapify";
 import { getCityFromHost } from "@/lib/cities";
+import { fallbackSearch } from "@/lib/providers/fallback";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,18 +41,25 @@ export async function GET(req: NextRequest) {
   // helps verify city & filters in your terminal
   console.log("[/api/businesses]", { host, city: `${city.city}, ${city.state}`, provider, category, q });
 
+  const input: SearchInput = { q, category, lat, lng, radius, page };
+
   if (missingKey) {
+    const fallback = fallbackSearch(city, input);
     const tookMs = Date.now() - t0;
-    return NextResponse.json({ items: [], nextCursor: null, provider, tookMs, error: "missing_key" });
+    return NextResponse.json({ ...fallback, tookMs, error: "missing_key" });
   }
 
   try {
-    const input: SearchInput = { q, category, lat, lng, radius, page };
     const res = await client.searchBusinesses(input);
     const tookMs = Date.now() - t0;
+    if (res.items.length === 0) {
+      const fallback = fallbackSearch(city, input);
+      return NextResponse.json({ ...fallback, tookMs });
+    }
     return NextResponse.json({ ...res, tookMs });
   } catch {
+    const fallback = fallbackSearch(city, input);
     const tookMs = Date.now() - t0;
-    return NextResponse.json({ items: [], nextCursor: null, provider, tookMs, error: "upstream_error" }, { status: 200 });
+    return NextResponse.json({ ...fallback, tookMs, error: "upstream_error" }, { status: 200 });
   }
 }

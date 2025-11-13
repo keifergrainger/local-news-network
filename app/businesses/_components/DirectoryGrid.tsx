@@ -24,7 +24,7 @@ export default function DirectoryGrid({
 }: {
   initialItems: Business[];
   initialNextCursor: string | null;
-  provider: "google" | "yelp" | "geoapify";
+  provider: "google" | "yelp" | "geoapify" | "local";
 }) {
   const sp = useSearchParams();
   const router = useRouter();

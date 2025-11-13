@@ -8,7 +8,8 @@ import { GeoapifyProvider } from "@/lib/providers/geoapify";
 import { getEnvNumber, Provider, ProviderClient } from "@/lib/providers/base";
 import { Business } from "@/types/business";
 import { headers } from "next/headers";
-import { getCityFromHost, cityLabel } from "@/lib/cities";
+import { getCityFromHost, cityLabel, type CityConfig } from "@/lib/cities";
+import { fallbackSearch } from "@/lib/providers/fallback";
 
 export const metadata: Metadata = {
   title: "Best Local Businesses &mdash; Directory",
@@ -17,7 +18,7 @@ export const metadata: Metadata = {
 
 const DEFAULT_CATEGORY = "Coffee";
 
-async function serverSearch(params: {
+async function serverSearch(city: CityConfig, params: {
   q?: string | null;
   category?: string | null;
   lat?: number;
@@ -33,18 +34,36 @@ async function serverSearch(params: {
       ? new GeoapifyProvider(process.env.GEOAPIFY_API_KEY)
       : new GooglePlacesProvider(process.env.GOOGLE_MAPS_API_KEY);
 
+  const input = {
+    q: params.q || null,
+    category: params.category || DEFAULT_CATEGORY,
+    lat: params.lat!,
+    lng: params.lng!,
+    radius: params.radius ?? getEnvNumber(process.env.CITY_RADIUS_M, 15000),
+    page: params.page || null,
+  };
+
+  const missingKey =
+    providerName === "google"
+      ? !process.env.GOOGLE_MAPS_API_KEY
+      : providerName === "yelp"
+      ? !process.env.YELP_API_KEY
+      : providerName === "geoapify"
+      ? !process.env.GEOAPIFY_API_KEY
+      : false;
+
+  if (missingKey) {
+    return fallbackSearch(city, input);
+  }
+
   try {
-    const res = await client.searchBusinesses({
-      q: params.q || null,
-      category: params.category || DEFAULT_CATEGORY,
-      lat: params.lat!,
-      lng: params.lng!,
-      radius: params.radius ?? getEnvNumber(process.env.CITY_RADIUS_M, 15000),
-      page: params.page || null,
-    });
+    const res = await client.searchBusinesses(input);
+    if (res.items.length === 0) {
+      return fallbackSearch(city, input);
+    }
     return { items: res.items, nextCursor: res.nextCursor, provider: res.provider };
   } catch {
-    return { items: [], nextCursor: null, provider: providerName };
+    return fallbackSearch(city, input);
   }
 }
 
@@ -60,7 +79,7 @@ export default async function Page({
   const q = typeof searchParams.q === "string" ? searchParams.q : undefined;
   const page = typeof searchParams.page === "string" ? searchParams.page : undefined;
 
-  const { items, nextCursor, provider } = await serverSearch({
+  const { items, nextCursor, provider } = await serverSearch(city, {
     q,
     category,
     lat: city.lat,
@@ -100,7 +119,10 @@ export default async function Page({
 
       {missingProviderKey ? (
         <div className="mt-6 rounded-2xl border border-yellow-700 bg-yellow-900/20 p-4 text-yellow-200">
-          <p className="text-sm">API key missing for provider <code className="rounded bg-black/40 px-1">{p}</code>.</p>
+          <p className="text-sm">
+            Live results from <code className="rounded bg-black/40 px-1">{p}</code> are unavailable. Showing our curated local
+            directory instead until an API key is added.
+          </p>
         </div>
       ) : null}
 

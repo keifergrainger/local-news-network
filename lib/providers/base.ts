@@ -1,6 +1,6 @@
 ﻿import { Business } from "@/types/business";
 
-export type Provider = "google" | "yelp" | "geoapify";
+export type Provider = "google" | "yelp" | "geoapify" | "local";
 
 export type SearchInput = {
   q?: string | null;
