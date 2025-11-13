@@ -127,11 +127,12 @@ function utcDayKey(date: Date) {
 
 function monthBoundariesUtc(date: Date, timeZone: string) {
   const first = startOfMonth(date);
-  const firstYmd = ymdInTimeZone(first, timeZone);
-  const [yearStr, monthStr] = firstYmd.split("-");
-  const year = Number(yearStr);
-  const month = Number(monthStr);
-  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
+  const year = first.getFullYear();
+  const monthIndex = first.getMonth();
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex)) return null;
+  const month = monthIndex + 1;
+  const monthStr = pad2(month);
+  const yearStr = String(year);
   const lastDay = new Date(year, month, 0).getDate();
   const start = startOfDayUtc(`${yearStr}-${monthStr}-01`, timeZone);
   const end = endOfDayUtc(`${yearStr}-${monthStr}-${pad2(lastDay)}`, timeZone);
