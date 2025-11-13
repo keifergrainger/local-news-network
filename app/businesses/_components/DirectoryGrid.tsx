@@ -4,120 +4,50 @@ import BusinessCard from "./BusinessCard";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-const API = "https://api.geoapify.com/v2/places";
-
-const CATEGORY_MAP: Record<string, string> = {
-  "coffee": "catering.cafe",
-  "restaurants": "catering.restaurant",
-  "bars": "catering.bar",
-  "gyms": "sport.fitness_centre,sport.sports_centre",
-  "plumbers": "service.plumber",
-  "electricians": "service.electrician",
-  "hvac": "service.hvac,service.air_conditioning",
-  "landscapers": "service.gardener,service.landscaping",
-  "pest-control": "service.pest_control",
-  "real-estate": "service.estate_agent,office.estate_agent",
-  "bar": "catering.bar",
-  "gym": "sport.fitness_centre,sport.sports_centre",
-  "plumber": "service.plumber",
-  "electrician": "service.electrician",
-};
-
-function slugify(value?: string | null) {
-  return (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function categoriesFor(category?: string | null) {
-  const slug = slugify(category);
-  return slug ? CATEGORY_MAP[slug] || null : null;
-}
-
-function parseNumber(value: string | null, fallback: number) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function featureToBusiness(feature: any): Business {
-  const props = feature?.properties ?? {};
-  const coords = Array.isArray(feature?.geometry?.coordinates) ? feature.geometry.coordinates : [undefined, undefined];
-  const address = props.formatted || [props.address_line1, props.address_line2].filter(Boolean).join(", ") || undefined;
-
-  return {
-    id: props.place_id || `${props.osm_id || ""}-${props.name || ""}-${address || "unknown"}`,
-    name: props.name || "Unknown",
-    rating: undefined,
-    reviewCount: undefined,
-    address,
-    website: props.website || props.datasource?.raw?.contact?.website || undefined,
-    openNow: undefined,
-    lat: typeof coords[1] === "number" ? coords[1] : undefined,
-    lng: typeof coords[0] === "number" ? coords[0] : undefined,
-    photoUrl: undefined,
-    source: "geoapify",
-    categories: Array.isArray(props.categories) ? props.categories : [],
-  };
-}
-
-async function fetchGeoapify({
+async function fetchBusinesses({
   params,
   defaults,
   signal,
-  apiKey,
 }: {
   params: URLSearchParams;
   defaults: { lat: number; lng: number; radius: number; category: string };
   signal: AbortSignal;
-  apiKey: string | null;
-}): Promise<{ items: Business[]; nextCursor: string | null }> {
-  if (!apiKey) {
-    return { items: [], nextCursor: null };
+}): Promise<{ items: Business[]; nextCursor: string | null; provider: string; error?: string | null }> {
+  const search = new URLSearchParams(params);
+
+  if (!search.get("category")) {
+    search.set("category", defaults.category);
   }
 
-  const categoryParam = params.get("category") || defaults.category;
-  const searchQuery = params.get("q");
-  const offsetParam = params.get("page");
-  const lat = parseNumber(params.get("lat"), defaults.lat);
-  const lng = parseNumber(params.get("lng"), defaults.lng);
-  const radius = parseNumber(params.get("radius"), defaults.radius);
-
-  const limit = 20;
-  const offset = parseNumber(offsetParam, 0);
-  const categories = categoriesFor(categoryParam);
-
-  const url = new URL(API);
-  if (categories) url.searchParams.set("categories", categories);
-
-  const trimmedQuery = (searchQuery || "").trim();
-  if (trimmedQuery) url.searchParams.set("name", trimmedQuery);
-
-  if (!categories && !trimmedQuery) {
-    url.searchParams.set("categories", "commercial,service,catering");
+  if (!search.get("lat")) {
+    search.set("lat", String(defaults.lat));
   }
 
-  if (!categories && categoryParam) {
-    const existing = url.searchParams.get("name");
-    url.searchParams.set("name", `${existing ? `${existing} ` : ""}${categoryParam}`.trim());
+  if (!search.get("lng")) {
+    search.set("lng", String(defaults.lng));
   }
 
-  url.searchParams.set("filter", `circle:${lng},${lat},${Math.max(100, Math.min(radius, 40000))}`);
-  url.searchParams.set("bias", `proximity:${lng},${lat}`);
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set("offset", String(Math.max(0, offset)));
-  url.searchParams.set("lang", "en");
-  url.searchParams.set("apiKey", apiKey);
+  if (!search.get("radius")) {
+    search.set("radius", String(defaults.radius));
+  }
 
-  const response = await fetch(url.toString(), { signal });
+  const response = await fetch(`/api/businesses?${search.toString()}`, {
+    signal,
+    cache: "no-store",
+  });
+
   if (!response.ok) {
-    throw new Error(`Geoapify error ${response.status}`);
+    throw new Error(`Request failed: ${response.status}`);
   }
 
   const json: any = await response.json();
-  const features: any[] = Array.isArray(json?.features) ? json.features : [];
-  const items = features.map(featureToBusiness);
-  const hasMore = features.length === limit;
-  const nextCursor = hasMore ? String(offset + limit) : null;
 
-  return { items, nextCursor };
+  return {
+    items: Array.isArray(json?.items) ? json.items : [],
+    nextCursor: typeof json?.nextCursor === "string" ? json.nextCursor : null,
+    provider: typeof json?.provider === "string" ? json.provider : "geoapify",
+    error: typeof json?.error === "string" ? json.error : null,
+  };
 }
 
 function SkeletonCard() {
@@ -139,14 +69,12 @@ export default function DirectoryGrid({
   defaultLng,
   defaultRadius,
   defaultCategory,
-  apiKey,
 }: {
   provider: "google" | "yelp" | "geoapify";
   defaultLat: number;
   defaultLng: number;
   defaultRadius: number;
   defaultCategory: string;
-  apiKey: string | null;
 }) {
   const sp = useSearchParams();
   const router = useRouter();
@@ -159,7 +87,7 @@ export default function DirectoryGrid({
 
   const [items, setItems] = useState<Business[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [providerName] = useState(provider);
+  const [providerName, setProviderName] = useState(provider);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -168,21 +96,21 @@ export default function DirectoryGrid({
   useEffect(() => {
     const controller = new AbortController();
     const params = sp.toString();
-    if (!apiKey) {
-      setItems([]);
-      setNextCursor(null);
-      setLoading(false);
-      setError(null);
-      return () => controller.abort();
-    }
-
     setLoading(true);
     setError(null);
 
-    fetchGeoapify({ params: new URLSearchParams(params), defaults, signal: controller.signal, apiKey })
-      .then(({ items, nextCursor }) => {
+    fetchBusinesses({ params: new URLSearchParams(params), defaults, signal: controller.signal })
+      .then(({ items, nextCursor, provider, error }) => {
         setItems(items);
         setNextCursor(nextCursor);
+        if (provider === "geoapify" || provider === "google" || provider === "yelp") {
+          setProviderName(provider);
+        }
+        if (error === "missing_key") {
+          setError("Geoapify API key is missing. Please add your API key and try again.");
+        } else if (error === "upstream_error") {
+          setError("Geoapify is unavailable right now. Please try again shortly.");
+        }
         prevStack.current = [];
       })
       .catch((err) => {
@@ -194,7 +122,7 @@ export default function DirectoryGrid({
       .finally(() => setLoading(false));
 
     return () => controller.abort();
-  }, [sp, defaults, apiKey]);
+  }, [sp, defaults]);
 
   function goNext() {
     if (!nextCursor) return;
