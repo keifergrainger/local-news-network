@@ -18,7 +18,8 @@ export default async function Page() {
   const city = getCityFromHost(hostHeader);
   const radius = getEnvNumber(process.env.CITY_RADIUS_M, 15000);
 
-  const missingGeoapifyKey = !process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY;
+  const geoapifyApiKey = process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY || process.env.GEOAPIFY_API_KEY || "";
+  const missingGeoapifyKey = !geoapifyApiKey;
   const providerLabel = "geoapify";
 
   const jsonLd = {
@@ -57,6 +58,7 @@ export default async function Page() {
         defaultLng={city.lon}
         defaultRadius={radius}
         provider={providerLabel}
+        apiKey={geoapifyApiKey || null}
       />
     </div>
   );

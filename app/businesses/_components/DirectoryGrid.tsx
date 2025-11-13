@@ -62,12 +62,13 @@ async function fetchGeoapify({
   params,
   defaults,
   signal,
+  apiKey,
 }: {
   params: URLSearchParams;
   defaults: { lat: number; lng: number; radius: number; category: string };
   signal: AbortSignal;
+  apiKey: string | null;
 }): Promise<{ items: Business[]; nextCursor: string | null }> {
-  const apiKey = process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY;
   if (!apiKey) {
     return { items: [], nextCursor: null };
   }
@@ -138,12 +139,14 @@ export default function DirectoryGrid({
   defaultLng,
   defaultRadius,
   defaultCategory,
+  apiKey,
 }: {
   provider: "google" | "yelp" | "geoapify";
   defaultLat: number;
   defaultLng: number;
   defaultRadius: number;
   defaultCategory: string;
+  apiKey: string | null;
 }) {
   const sp = useSearchParams();
   const router = useRouter();
@@ -165,10 +168,18 @@ export default function DirectoryGrid({
   useEffect(() => {
     const controller = new AbortController();
     const params = sp.toString();
+    if (!apiKey) {
+      setItems([]);
+      setNextCursor(null);
+      setLoading(false);
+      setError(null);
+      return () => controller.abort();
+    }
+
     setLoading(true);
     setError(null);
 
-    fetchGeoapify({ params: new URLSearchParams(params), defaults, signal: controller.signal })
+    fetchGeoapify({ params: new URLSearchParams(params), defaults, signal: controller.signal, apiKey })
       .then(({ items, nextCursor }) => {
         setItems(items);
         setNextCursor(nextCursor);
@@ -183,7 +194,7 @@ export default function DirectoryGrid({
       .finally(() => setLoading(false));
 
     return () => controller.abort();
-  }, [sp, defaults]);
+  }, [sp, defaults, apiKey]);
 
   function goNext() {
     if (!nextCursor) return;
