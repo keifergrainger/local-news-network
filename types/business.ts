@@ -1,6 +1,6 @@
 // types/business.ts
 
-export type BusinessSource = "google" | "yelp" | "geoapify";
+export type BusinessSource = "google" | "yelp" | "geoapify" | "local";
 
 export interface Business {
   id: string;
