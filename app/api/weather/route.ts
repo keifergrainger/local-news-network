@@ -46,7 +46,8 @@ export async function GET(req: NextRequest) {
       temp: Number(cur.temperature_2m ?? NaN),
       wind: Number(cur.wind_speed_10m ?? NaN),
       label: codeToLabel(code),
-      unitT, unitW,
+      unitT,
+      unitW,
     };
     const today = {
       high: Number(daily.temperature_2m_max?.[0] ?? NaN),
@@ -55,7 +56,13 @@ export async function GET(req: NextRequest) {
       unitT,
     };
 
-    const chip = `${Math.round(current.temp)}${unitT} • ${current.label} • Wind ${Math.round(current.wind)} ${unitW} • H:${Math.round(today.high)}° L:${Math.round(today.low)}° • ${isFinite(today.precip)?today.precip:0}%`;
+    const parts: string[] = [];
+    const hasTemp = Number.isFinite(current.temp);
+    const hasWind = Number.isFinite(current.wind);
+    parts.push(hasTemp ? `${Math.round(current.temp)}${unitT}` : `--${unitT}`);
+    parts.push(current.label || "Weather");
+    if (hasWind) parts.push(`Wind ${Math.round(current.wind)} ${unitW}`);
+    const chip = parts.join(" • ");
 
     return NextResponse.json({
       city: { city: city.city, state: city.state, lat: city.lat, lon: city.lon },
