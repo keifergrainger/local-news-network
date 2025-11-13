@@ -202,14 +202,15 @@ export default function Calendar() {
   const city = getCityFromHost(host || DEFAULT_HOST);
   const timeZone = city.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+  const monthRange = useMemo(() => monthBoundariesUtc(activeMonth, timeZone), [activeMonth, timeZone]);
+
   // Fetch month summary (tops + moreCount)
   useEffect(() => {
     if (!city?.host) return;
-    const range = monthBoundariesUtc(activeMonth, timeZone);
     const fallbackStart = startOfMonth(activeMonth);
     const fallbackEnd = new Date(activeMonth.getFullYear(), activeMonth.getMonth() + 1, 0, 23, 59, 59, 999);
-    const from = range?.start ?? fallbackStart;
-    const to = range?.end ?? fallbackEnd;
+    const from = monthRange?.start ?? fallbackStart;
+    const to = monthRange?.end ?? fallbackEnd;
     const qs = new URLSearchParams({
       cityHost: city.host,
       from: from.toISOString(),
@@ -227,22 +228,36 @@ export default function Calendar() {
       })
       .catch(() => setError("We couldn’t load events for this month."))
       .finally(() => setLoading(false));
-  }, [activeMonth, city.host, timeZone]);
+  }, [activeMonth, city.host, monthRange, timeZone]);
 
   // 6x7 grid
   const gridDates = useMemo(() => {
-    const first = startOfMonth(activeMonth);
-    const offset = weekdayInTimeZone(first, timeZone);
-    const start = new Date(first);
-    start.setDate(first.getDate() - offset);
-    const arr: Date[] = [];
-    for (let i = 0; i < 42; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      arr.push(d);
+    const monthStart = monthRange?.start ?? startOfMonth(activeMonth);
+    const offset = weekdayInTimeZone(monthStart, timeZone);
+
+    if (monthRange?.start) {
+      const gridStart = new Date(monthRange.start);
+      gridStart.setUTCDate(gridStart.getUTCDate() - offset);
+      const baseDay = gridStart.getUTCDate();
+      const list: Date[] = [];
+      for (let i = 0; i < 42; i++) {
+        const d = new Date(gridStart);
+        d.setUTCDate(baseDay + i);
+        list.push(d);
+      }
+      return list;
     }
-    return arr;
-  }, [activeMonth, timeZone]);
+
+    const gridStart = new Date(monthStart);
+    gridStart.setDate(monthStart.getDate() - offset);
+    const list: Date[] = [];
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(gridStart);
+      d.setDate(gridStart.getDate() + i);
+      list.push(d);
+    }
+    return list;
+  }, [activeMonth, monthRange, timeZone]);
 
   const monthLabel = useMemo(
     () =>
@@ -255,8 +270,8 @@ export default function Calendar() {
   );
 
   const activeMonthKey = useMemo(
-    () => ymdInTimeZone(activeMonth, timeZone).slice(0, 7),
-    [activeMonth, timeZone]
+    () => `${activeMonth.getFullYear()}-${pad2(activeMonth.getMonth() + 1)}`,
+    [activeMonth]
   );
   const todayKey = useMemo(() => ymdInTimeZone(new Date(), timeZone), [timeZone]);
 
