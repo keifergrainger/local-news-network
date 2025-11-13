@@ -1,5 +1,7 @@
 ﻿import path from "path";
 import fs from "fs/promises";
+import type { CityConfig } from "@/lib/cities";
+import { loadExternalEvents, resolveCity } from "./events/sources";
 
 export type EventItem = {
   id?: string;
@@ -55,7 +57,7 @@ export function deriveRangeFromQuery(u: URL) {
   return monthRangeUTC(y, m);
 }
 
-export async function loadEvents(): Promise<EventItem[]> {
+async function loadStaticEvents(): Promise<EventItem[]> {
   const file = path.join(process.cwd(), "public", "events.json");
   try {
     const raw = await fs.readFile(file, "utf8");
@@ -64,4 +66,52 @@ export async function loadEvents(): Promise<EventItem[]> {
   } catch {
     return [];
   }
+}
+
+export type LoadEventsOptions = {
+  city?: CityConfig | null;
+  cityHost?: string | null;
+  from?: Date | null;
+  to?: Date | null;
+  radiusMiles?: number | null;
+};
+
+export async function loadEvents(options: LoadEventsOptions = {}): Promise<EventItem[]> {
+  const {
+    city: providedCity = null,
+    cityHost = null,
+    from = null,
+    to = null,
+    radiusMiles = null,
+  } = options;
+
+  const city = providedCity ?? resolveCity(cityHost ?? undefined);
+  const radius = radiusMiles ?? city.eventRadiusMiles ?? 25;
+
+  const [external, local] = await Promise.all([
+    loadExternalEvents(city, from, to, radius).catch(() => []),
+    loadStaticEvents().catch(() => []),
+  ]);
+
+  if (!local.length) return external;
+  if (!external.length) return local;
+
+  const seen = new Set<string>();
+  const merged: EventItem[] = [];
+
+  for (const ev of local) {
+    const key = `${ev?.id ?? ""}|${ev?.start ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(ev);
+  }
+
+  for (const ev of external) {
+    const key = `${ev?.id ?? ""}|${ev?.start ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(ev);
+  }
+
+  return merged;
 }

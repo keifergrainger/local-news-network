@@ -1,7 +1,6 @@
 import { getCityFromHost } from "@/lib/cities";
 import type { CityConfig } from "@/lib/cities";
 import { loadEvents, safeDate, type EventItem } from "../_events-util";
-import { loadExternalEvents } from "../events/sources";
 
 export type NormalizedEvent = {
   id: string;
@@ -131,12 +130,7 @@ export async function loadFilteredEvents(url: URL): Promise<FilteredEventsResult
     ? to.getTime() + (dateOnlyTo ? 24 * 60 * 60 * 1000 - 1 : 0)
     : Number.POSITIVE_INFINITY;
 
-  const [rawEvents, external] = await Promise.all([
-    loadEvents(),
-    loadExternalEvents(city, from, to, radiusMiles),
-  ]);
-
-  const combined: EventItem[] = [...rawEvents, ...external];
+  const combined: EventItem[] = await loadEvents({ city, from, to, radiusMiles });
   const normalized: NormalizedEvent[] = [];
   const seenIds = new Set<string>();
   const seenTitle = new Set<string>();
