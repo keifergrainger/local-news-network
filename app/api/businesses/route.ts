@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   const city = getCityFromHost(hostHeader);
   const normalizedHost = hostHeader.toLowerCase();
   const refererHost = normalizedHost.includes(city.host) ? hostHeader : city.host;
-  const referer = refererHost ? `https://${refererHost}` : undefined;
+  const referer = refererHost ? `https://${refererHost.replace(/\/$/, "")}/` : undefined;
 
   const url = new URL(req.url);
   const q = url.searchParams.get("q");

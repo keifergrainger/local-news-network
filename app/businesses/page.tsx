@@ -39,7 +39,7 @@ export default async function Page({
     : getEnvNumber(process.env.CITY_RADIUS_M, 15000);
 
   const { client, name: providerName, missingKey } = resolveProvider();
-  const referer = refererHost ? `https://${refererHost}` : undefined;
+  const referer = refererHost ? `https://${refererHost.replace(/\/$/, "")}/` : undefined;
 
   let items: Business[] = [];
   let nextCursor: string | null = null;

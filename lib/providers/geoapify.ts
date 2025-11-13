@@ -69,7 +69,15 @@ export class GeoapifyProvider implements ProviderClient {
     url.searchParams.set("apiKey", this.apiKey);
 
     const headers: Record<string, string> = {};
-    if (input.referer) headers["referer"] = input.referer;
+    if (input.referer) {
+      headers["Referer"] = input.referer;
+      try {
+        const url = new URL(input.referer);
+        headers["Origin"] = `${url.protocol}//${url.host}`;
+      } catch {
+        // ignore invalid referer
+      }
+    }
 
     const r = await fetch(url.toString(), {
       next: { revalidate: 3600 },

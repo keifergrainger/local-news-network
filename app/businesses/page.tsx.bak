@@ -60,7 +60,7 @@ export default async function Page({
   const city = getCityFromHost(hostHeader);
   const normalizedHost = hostHeader.toLowerCase();
   const refererHost = normalizedHost.includes(city.host) ? hostHeader : city.host;
-  const referer = refererHost ? `https://${refererHost}` : undefined;
+  const referer = refererHost ? `https://${refererHost.replace(/\/$/, "")}/` : undefined;
 
   const category = typeof searchParams.category === "string" ? searchParams.category : DEFAULT_CATEGORY;
   const q = typeof searchParams.q === "string" ? searchParams.q : undefined;
