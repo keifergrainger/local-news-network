@@ -1,5 +1,4 @@
 ﻿'use client';
-import EventsFromJson from "../components/EventsFromJson";
 import Link from 'next/link';
 import { getCityFromHost } from '@/lib/cities';
 import { useEffect, useState } from 'react';
@@ -87,7 +86,5 @@ export default function HomePage() {
     </div>
   );
 }
-
-<EventsFromJson year={2025} month={11} />
 
 
