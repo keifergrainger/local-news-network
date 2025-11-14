@@ -17,7 +17,7 @@ type ApiEvent = {
 
 type DaySummary = {
   date: string; // YYYY-MM-DD
-  tops: ApiEvent[]; // first 1–2 events to show in the cell
+  tops: ApiEvent[]; // first event to show in the cell
   moreCount: number; // how many extra events beyond the tops
 };
 
@@ -87,7 +87,15 @@ function dedupeEventsClient(events: ApiEvent[]): ApiEvent[] {
     const keyBase = `${titleKey}|${ymd}`;
     const key = loc ? `${keyBase}|${loc}` : keyBase;
 
-    if (!seen.has(key)) {
+    const prev = seen.get(key);
+    if (!prev) {
+      seen.set(key, e);
+      continue;
+    }
+
+    const prevTime = prev.start ? +new Date(prev.start) : Infinity;
+    const nextTime = e.start ? +new Date(e.start) : Infinity;
+    if (nextTime < prevTime) {
       seen.set(key, e);
     }
   }
@@ -95,7 +103,12 @@ function dedupeEventsClient(events: ApiEvent[]): ApiEvent[] {
   return Array.from(seen.values());
 }
 
-export default function Calendar() {
+type CalendarProps = {
+  id?: string;
+  onRequestSubmitEvent?: (ymd?: string) => void;
+};
+
+export default function Calendar({ id, onRequestSubmitEvent }: CalendarProps) {
   const [host, setHost] = useState('');
   const [activeMonth, setActiveMonth] = useState<Date>(() => startOfMonth(new Date()));
 
@@ -181,7 +194,7 @@ export default function Calendar() {
     const out: Record<string, DaySummary> = {};
 
     for (const [ymd, events] of Object.entries(eventsByDay)) {
-      const tops = events.slice(0, 2);
+      const tops = events.slice(0, 1);
       out[ymd] = {
         date: ymd,
         tops,
@@ -243,7 +256,10 @@ export default function Calendar() {
   }, [modalOpen]);
 
   return (
-    <section className="mt-6 rounded-xl border border-gray-800 bg-black/40 p-4 md:p-6">
+    <section
+      id={id}
+      className="mt-6 rounded-xl border border-gray-800 bg-black/40 p-4 md:p-6"
+    >
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-lg font-semibold">
@@ -254,7 +270,7 @@ export default function Calendar() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
             onClick={() => setActiveMonth((m) => addMonths(m, -1))}
@@ -277,6 +293,13 @@ export default function Calendar() {
             aria-label="Next month"
           >
             ›
+          </button>
+          <button
+            type="button"
+            onClick={() => onRequestSubmitEvent?.()}
+            className="ml-1 rounded border border-blue-600/70 bg-blue-600/10 px-3 py-1 text-sm font-medium text-blue-200 transition hover:bg-blue-600/20"
+          >
+            Submit Your Event
           </button>
         </div>
       </div>

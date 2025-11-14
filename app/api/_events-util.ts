@@ -59,7 +59,8 @@ export async function loadEvents(): Promise<EventItem[]> {
   const file = path.join(process.cwd(), "public", "events.json");
   try {
     const raw = await fs.readFile(file, "utf8");
-    const parsed = JSON.parse(raw || "[]");
+    const normalized = raw.replace(/^\uFEFF/, "");
+    const parsed = JSON.parse(normalized || "[]");
     return Array.isArray(parsed) ? (parsed as EventItem[]) : [];
   } catch {
     return [];

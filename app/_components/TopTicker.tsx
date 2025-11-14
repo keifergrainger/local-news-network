@@ -23,7 +23,7 @@ export default function TopTicker() {
       } catch {}
     }
     load();
-    const t = setInterval(load, 60000);
+    const t = setInterval(load, 10 * 60 * 1000);
     return () => { cancelled = true; clearInterval(t); };
   }, []);
 
